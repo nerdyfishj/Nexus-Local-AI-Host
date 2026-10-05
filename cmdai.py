@@ -176,7 +176,7 @@ def main(argv=None):
     try:
         while True:
             try:
-                prompt = input("you> ").strip()
+                prompt = input(("\n" if spaced_replies else "") + "you> ").strip()
             except EOFError:
                 break
             if not prompt:

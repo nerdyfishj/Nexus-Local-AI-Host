@@ -115,13 +115,23 @@ class ChatCompletionTests(unittest.TestCase):
     def test_compact_flag_removes_extra_reply_spacing(self):
         output = io.StringIO()
         with patch.dict(os.environ, {}, clear=True):
-            with patch("builtins.input", side_effect=["Hi", "/exit"]):
+            with patch("builtins.input", side_effect=["Hi", "/exit"]) as user_input:
                 with patch("cmdai.ollama_chat_completion", return_value="Hello"):
                     with redirect_stdout(output):
                         self.assertEqual(cmdai.main(["--compact"]), 0)
 
         self.assertIn(".cmdAI> Hello\n", output.getvalue())
         self.assertNotIn("\n\n.cmdAI> Hello", output.getvalue())
+        self.assertEqual(user_input.call_args_list[0].args, ("you> ",))
+
+    def test_default_spacing_adds_a_blank_line_before_each_prompt(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("builtins.input", side_effect=["Hi", "/exit"]) as user_input:
+                with patch("cmdai.ollama_chat_completion", return_value="Hello"):
+                    self.assertEqual(cmdai.main([]), 0)
+
+        self.assertEqual(user_input.call_args_list[0].args, ("\nyou> ",))
+        self.assertEqual(user_input.call_args_list[1].args, ("\nyou> ",))
 
     def test_trainmodel_saves_examples_and_uses_matching_example(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

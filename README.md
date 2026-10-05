@@ -34,7 +34,7 @@ python cmdai.py --provider openai
 
 For the optional OpenAI-compatible provider, configure `CMD_AI_BASE_URL` and `CMD_AI_MODEL` as needed. The OpenAI defaults are `https://api.openai.com/v1` and `gpt-4o-mini`; set `CMD_AI_API_KEY` or `OPENAI_API_KEY` to avoid the key prompt.
 
-Replies are spaced out by default; start with `--compact` or use `/spacing on|off` to change that during a session. Type `/help` for available commands:
+Prompts and replies are spaced out by default; start with `--compact` or use `/spacing on|off` to change that during a session. Type `/help` for available commands:
 
 - `/clear` starts a fresh conversation while keeping your system instructions.
 - `/dev on|off|status` enables or disables password-protected developer tools.
