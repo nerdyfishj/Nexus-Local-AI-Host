@@ -14,15 +14,52 @@ import install
 
 
 class ChatCompletionTests(unittest.TestCase):
-    def test_windows_icon_is_a_valid_ico_with_png_image(self):
+    def test_repository_icon_contains_an_extractable_png(self):
+        icon_path = Path(install.ROOT) / "cmdAI.ico"
+        icon_data = icon_path.read_bytes()
+        png_data = install.png_data_from_icon(icon_path)
         with tempfile.TemporaryDirectory() as temporary_directory:
-            icon_path = Path(temporary_directory) / "cmdAI.ico"
-            install.write_windows_icon(icon_path)
-
-            icon_data = icon_path.read_bytes()
+            logo_path = Path(temporary_directory) / "logo.png"
+            install.write_logo_png(logo_path)
+            extracted_logo = logo_path.read_bytes()
 
         self.assertEqual(icon_data[:6], struct.pack("<HHH", 0, 1, 1))
         self.assertEqual(icon_data[22:30], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(png_data[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack(">II", png_data[16:24]), (128, 128))
+        self.assertEqual(extracted_logo, png_data)
+
+    def test_windows_launcher_references_repository_icon(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            desktop = Path(temporary_directory)
+            with patch("install.subprocess.run") as run:
+                shortcut = install.install_windows(desktop)
+            command = run.call_args.args[0][-1]
+
+        self.assertEqual(shortcut.name, ".cmdAI.lnk")
+        self.assertIn(str(Path(install.ROOT) / "cmdAI.ico"), command)
+
+    def test_linux_desktop_launcher_references_generated_logo(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "repository"
+            desktop = Path(temporary_directory) / "Desktop"
+            root.mkdir()
+            desktop.mkdir()
+            icon_path = Path(install.ROOT) / "cmdAI.ico"
+            (root / "cmdAI.ico").write_bytes(icon_path.read_bytes())
+            with patch.object(install, "ROOT", root):
+                with patch.object(install, "SCRIPT", root / "cmdai.py"):
+                    with patch.object(install.sys, "platform", "linux"):
+                        shortcut = install.install_unix(desktop)
+
+            contents = shortcut.read_text(encoding="utf-8")
+            logo_path = root / "cmdAI.png"
+            logo_data = logo_path.read_bytes()
+            expected_logo = install.png_data_from_icon(root / "cmdAI.ico")
+
+        escaped_logo_path = str(logo_path).replace("\\", "\\\\").replace('"', '\\"')
+        self.assertIn('Icon="{}"'.format(escaped_logo_path), contents)
+        self.assertEqual(logo_data, expected_logo)
 
     def test_ollama_posts_without_api_key_and_returns_assistant_text(self):
         class Response:
