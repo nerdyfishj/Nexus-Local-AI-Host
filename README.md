@@ -35,14 +35,6 @@ cmdai-install
 
 This installs `.cmdAI` in an isolated Python environment and creates a desktop launcher (`.cmdAI.lnk` on Windows, `cmdAI.desktop` on Linux, or `cmdAI.app` on macOS). Opening the launcher starts the chat in a terminal on each OS: Windows opens the Python console, Linux uses the desktop terminal, and macOS opens Terminal. To start it directly from any terminal instead, run `cmdai`.
 
-After installing a version that includes the updater, update `.cmdAI` from inside a chat with `/update`, or from a terminal with:
-
-```sh
-cmdai-update
-```
-
-The update command upgrades the pipx-installed package; exit and restart `.cmdAI` to use the updated version. If you already have an older version without the updater, run `pipx upgrade cmdai-assistant` once to get it. The updater is for pipx installations; update a local Git clone with `git pull`. If you installed from a downloaded archive, download the newer archive and replace the old folder.
-
 ### Install from a local checkout
 
 Clone or download this repository into a permanent folder, then run the installer once:
@@ -62,6 +54,40 @@ This creates the platform-specific desktop launcher, which opens the chat in a t
 On Windows, the shortcut launches this folder's Python interpreter and `cmdai.py` directly; GitHub Desktop is not required. If you move the repository, run `python install.py` again from its new location to update the shortcut.
 
 Then launch `.cmdAI` from the desktop. The default model is `llama3.1:8b`, served locally at `http://localhost:11434`. It is a larger, more capable model than the previous default and uses more disk space and memory. Choose another installed model with `CMD_AI_MODEL` or `--model`.
+
+## Updating
+
+Close `.cmdAI` before updating, then use the method that matches how you installed it:
+
+### Installed with pipx from GitHub
+
+If your installed version already includes the updater, update from a terminal:
+
+```sh
+cmdai-update
+```
+
+Or type `/update` in a chat. Exit and restart `.cmdAI` to use the new version. If your version does not yet include the updater, run this one time:
+
+```sh
+pipx upgrade cmdai-assistant
+```
+
+After that, use `cmdai-update` or `/update` for later updates.
+
+### Installed from a local Git clone with `install.py`
+
+Open a terminal in the cloned repository folder and pull the latest version:
+
+```sh
+git pull
+```
+
+Then reopen the desktop shortcut. You do not need to rerun `install.py` unless you moved the repository folder or need to recreate the shortcut.
+
+### Installed from a downloaded ZIP archive
+
+Download the [latest ZIP archive from GitHub](https://github.com/nerdyfishj/.cmdAI/archive/refs/heads/main.zip) and replace the old application folder with the updated files. If you put the new folder in a different location, run `install.py` again from that folder to recreate the desktop shortcut.
 
 To use OpenAI instead, select the provider; it will prompt for an API key if needed:
 
