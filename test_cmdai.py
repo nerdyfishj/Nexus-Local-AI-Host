@@ -3,17 +3,39 @@ import json
 import os
 import struct
 import tempfile
+import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 from urllib.request import Request
 from pathlib import Path
 
 import cmdai
+import cmdai_update
 import install
 
 
 class ChatCompletionTests(unittest.TestCase):
+    def setUp(self):
+        self.check_internet = cmdai.internet_available
+        self.test_conversation_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.test_conversation_directory.cleanup)
+        original_conversations_directory = cmdai.conversations_directory
+
+        def conversations_directory_for_test():
+            if os.environ.get("CMD_AI_CONVERSATIONS_DIR"):
+                return original_conversations_directory()
+            return self.test_conversation_directory.name
+
+        conversation_directory_patch = patch(
+            "cmdai.conversations_directory", side_effect=conversations_directory_for_test
+        )
+        conversation_directory_patch.start()
+        self.addCleanup(conversation_directory_patch.stop)
+        internet_check = patch("cmdai.internet_available", return_value=False)
+        internet_check.start()
+        self.addCleanup(internet_check.stop)
+
     def test_repository_icon_contains_an_extractable_png(self):
         icon_path = Path(install.ROOT) / "cmdAI.ico"
         icon_data = icon_path.read_bytes()
@@ -38,6 +60,17 @@ class ChatCompletionTests(unittest.TestCase):
 
         self.assertEqual(shortcut.name, ".cmdAI.lnk")
         self.assertIn(str(Path(install.ROOT) / "cmdAI.ico"), command)
+
+    def test_installed_icon_is_found_in_data_directory(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "site-packages"
+            data_directory = Path(temporary_directory) / "environment"
+            packaged_icon = data_directory / "share" / "cmdai" / "cmdAI.ico"
+            packaged_icon.parent.mkdir(parents=True)
+            packaged_icon.write_bytes(b"icon")
+            with patch.object(install, "ROOT", root):
+                with patch("install.sysconfig.get_path", return_value=str(data_directory)):
+                    self.assertEqual(install.icon_path(), packaged_icon)
 
     def test_linux_desktop_launcher_references_generated_logo(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -122,6 +155,119 @@ class ChatCompletionTests(unittest.TestCase):
 
         getpass_prompt.assert_not_called()
         self.assertEqual(completion.call_args.args[2], "llama3.1:8b")
+
+    def test_completed_conversation_is_saved_and_listed(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = io.StringIO()
+            prompts = ["Hi", "/history", "/exit"]
+            with patch.dict(os.environ, {"CMD_AI_CONVERSATIONS_DIR": temporary_directory}, clear=True):
+                with patch("builtins.input", side_effect=prompts):
+                    with patch("cmdai.ollama_chat_completion", return_value="Hello"):
+                        with redirect_stdout(output):
+                            self.assertEqual(cmdai.main(["--compact"]), 0)
+
+            paths = cmdai.list_conversations(temporary_directory)
+            self.assertEqual(len(paths), 1)
+            saved_conversation = json.loads(Path(paths[0]).read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            [(message["role"], message["content"]) for message in saved_conversation["messages"]],
+            [("user", "Hi"), ("assistant", "Hello")],
+        )
+        self.assertNotIn("system", [message["role"] for message in saved_conversation["messages"]])
+        self.assertIn("Conversation folder: {}".format(temporary_directory), output.getvalue())
+        self.assertIn(Path(paths[0]).name, output.getvalue())
+
+    def test_clear_starts_a_new_saved_conversation(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            prompts = ["First", "/clear", "Second", "/exit"]
+            with patch.dict(os.environ, {"CMD_AI_CONVERSATIONS_DIR": temporary_directory}, clear=True):
+                with patch("builtins.input", side_effect=prompts):
+                    with patch("cmdai.ollama_chat_completion", side_effect=["One", "Two"]):
+                        self.assertEqual(cmdai.main(["--compact"]), 0)
+
+            saved_conversations = [
+                json.loads(Path(path).read_text(encoding="utf-8"))
+                for path in cmdai.list_conversations(temporary_directory)
+            ]
+
+        self.assertEqual(len(saved_conversations), 2)
+        actual_conversations = [
+            [message["content"] for message in conversation["messages"]]
+            for conversation in saved_conversations
+        ]
+        self.assertEqual(
+            sorted(actual_conversations),
+            sorted([["First", "One"], ["Second", "Two"]]),
+        )
+
+    def test_update_command_runs_pipx_upgrade(self):
+        with patch("cmdai_update.shutil.which", return_value="pipx"):
+            with patch("cmdai_update.subprocess.run", return_value=type("Result", (), {"returncode": 0})()) as run:
+                self.assertEqual(cmdai_update.main(), 0)
+
+        run.assert_called_once_with(["pipx", "upgrade", "cmdai-assistant"], check=False)
+
+    def test_update_command_reports_missing_pipx(self):
+        error_output = io.StringIO()
+        with patch("cmdai_update.shutil.which", return_value=None):
+            with redirect_stderr(error_output):
+                self.assertEqual(cmdai_update.main(), 1)
+
+        self.assertIn("pipx was not found on PATH", error_output.getvalue())
+
+    def test_chat_update_command_invokes_updater(self):
+        with patch("builtins.input", side_effect=["/update", "/exit"]):
+            with patch("cmdai_update.main", return_value=0) as update:
+                self.assertEqual(cmdai.main(["--compact"]), 0)
+
+        update.assert_called_once_with()
+
+    def test_response_status_reflects_internet_availability(self):
+        for internet_connected, status in (
+            (True, "internet connection detected"),
+            (False, "offline; internet connection not detected"),
+        ):
+            with self.subTest(internet_connected=internet_connected):
+                output = io.StringIO()
+                with patch("cmdai.internet_available", return_value=internet_connected):
+                    with patch("builtins.input", side_effect=["Hi", "/exit"]):
+                        with patch("cmdai.ollama_chat_completion", return_value="Hello"):
+                            with redirect_stdout(output):
+                                self.assertEqual(cmdai.main(["--compact"]), 0)
+
+                text = output.getvalue()
+                self.assertIn(".cmdAI> Generating with llama3.1:8b ({})".format(status), text)
+                answer_position = text.index(".cmdAI> Hello")
+                self.assertLess(text.index(".cmdAI> Generating"), answer_position)
+
+    def test_progress_indicator_updates_until_generation_finishes(self):
+        output = io.StringIO()
+
+        def delayed_answer(*args):
+            time.sleep(0.25)
+            return "Hello"
+
+        with patch("builtins.input", side_effect=["Hi", "/exit"]):
+            with patch("cmdai.ollama_chat_completion", side_effect=delayed_answer):
+                with redirect_stdout(output):
+                    self.assertEqual(cmdai.main(["--compact"]), 0)
+
+        self.assertGreaterEqual(output.getvalue().count("Generating with llama3.1:8b"), 2)
+
+    def test_internet_check_handles_unreachable_network(self):
+        with patch("cmdai.socket.create_connection", side_effect=OSError("unreachable")) as connect:
+            self.assertFalse(self.check_internet())
+
+        connect.assert_called_once_with(("1.1.1.1", 443), timeout=1)
+
+    def test_internet_check_closes_connection(self):
+        connection = io.StringIO()
+        with patch("cmdai.socket.create_connection", return_value=connection) as connect:
+            self.assertTrue(self.check_internet())
+
+        connect.assert_called_once_with(("1.1.1.1", 443), timeout=1)
+        self.assertTrue(connection.closed)
 
     def test_terminal_commands_customize_chat_without_being_sent_as_prompts(self):
         prompts = [

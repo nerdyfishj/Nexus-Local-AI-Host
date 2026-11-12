@@ -1,12 +1,16 @@
 """A cross-platform terminal client for Ollama and OpenAI-compatible chat APIs."""
 
 import argparse
+import datetime
 import getpass
 import hmac
 import json
 import os
 import re
+import socket
 import sys
+import threading
+import uuid
 import urllib.error
 import urllib.request
 
@@ -17,6 +21,37 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Keep answers clear and concise."
 MAX_TRAINING_EXAMPLES = 3
+
+
+def internet_available():
+    """Return whether an external HTTPS connection can be established."""
+    try:
+        with socket.create_connection(("1.1.1.1", 443), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def run_with_progress(operation, message):
+    """Run an operation while showing a live status indicator."""
+    stopped = threading.Event()
+
+    def show_progress():
+        spinner = "|/-\\"
+        index = 0
+        while not stopped.is_set():
+            print("\r.cmdAI> {} {}".format(message, spinner[index]), end="", flush=True)
+            index = (index + 1) % len(spinner)
+            stopped.wait(0.1)
+        print("\r" + " " * (len(message) + len(".cmdAI> ") + 1) + "\r", end="", flush=True)
+
+    progress_thread = threading.Thread(target=show_progress)
+    progress_thread.start()
+    try:
+        return operation()
+    finally:
+        stopped.set()
+        progress_thread.join()
 
 
 def ollama_chat_completion(messages, base_url, model):
@@ -115,6 +150,46 @@ def export_conversation(path, provider, model, messages):
         json.dump({"provider": provider, "model": model, "messages": messages}, export_file, indent=2)
 
 
+def conversations_directory():
+    configured_directory = os.environ.get("CMD_AI_CONVERSATIONS_DIR")
+    if configured_directory:
+        return os.path.abspath(os.path.expanduser(configured_directory))
+    return os.path.join(os.path.expanduser("~"), ".cmdai", "conversations")
+
+
+def new_conversation_path(directory):
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = "conversation-{}-{}.json".format(timestamp, uuid.uuid4().hex[:8])
+    return os.path.join(directory, filename)
+
+
+def save_conversation(path, provider, model, messages):
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    conversation = {
+        "provider": provider,
+        "model": model,
+        "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "messages": [
+            message for message in messages if message["role"] in ("user", "assistant")
+        ],
+    }
+    with open(path, "w", encoding="utf-8") as conversation_file:
+        json.dump(conversation, conversation_file, ensure_ascii=False, indent=2)
+
+
+def list_conversations(directory):
+    try:
+        filenames = os.listdir(directory)
+    except FileNotFoundError:
+        return []
+    return [
+        os.path.join(directory, filename)
+        for filename in sorted(filenames)
+        if filename.startswith("conversation-") and filename.endswith(".json")
+    ]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Chat with an AI from your terminal.")
     parser.add_argument(
@@ -169,6 +244,8 @@ def main(argv=None):
     except (OSError, ValueError) as error:
         print(".cmdAI warning: could not load training examples: {}".format(error), file=sys.stderr)
         training_examples = []
+    history_directory = conversations_directory()
+    conversation_path = None
     developer_password = os.environ.get("CMD_AI_DEV_PASSWORD") or None
     developer_mode = False
     spaced_replies = not args.compact
@@ -216,7 +293,7 @@ def main(argv=None):
                 elif command in ("/model", "/system", "/trainmodel", "/debug", "/context", "/export") and not developer_mode:
                     print("Developer mode is off. Use /dev on to unlock this tool.")
                 elif command == "/help":
-                    print("Commands: /help, /exit, /clear, /spacing on|off, /dev on|off|status")
+                    print("Commands: /help, /exit, /clear, /history, /update, /spacing on|off, /dev on|off|status")
                     if developer_mode:
                         print(
                             "Developer tools: /model [name], /system [instructions], "
@@ -226,7 +303,24 @@ def main(argv=None):
                         print("Use /dev on to unlock developer tools.")
                 elif command == "/clear":
                     messages = [messages[0]]
+                    conversation_path = None
                     print("Conversation cleared.")
+                elif command == "/history":
+                    print("Conversation folder: {}".format(history_directory))
+                    try:
+                        saved_conversations = list_conversations(history_directory)
+                    except OSError as error:
+                        print(".cmdAI error: could not list conversations: {}".format(error), file=sys.stderr)
+                    else:
+                        if not saved_conversations:
+                            print("No saved conversations.")
+                        else:
+                            for path in saved_conversations:
+                                print(os.path.basename(path))
+                elif command == "/update":
+                    import cmdai_update
+
+                    cmdai_update.main()
                 elif command == "/model":
                     if value:
                         model = value
@@ -327,10 +421,21 @@ def main(argv=None):
             messages.append({"role": "user", "content": prompt})
             request_messages = messages_with_training_examples(messages, training_examples)
             try:
+                connection_status = (
+                    "internet connection detected"
+                    if internet_available()
+                    else "offline; internet connection not detected"
+                )
                 if args.provider == "ollama":
-                    answer = ollama_chat_completion(request_messages, base_url, model)
+                    answer = run_with_progress(
+                        lambda: ollama_chat_completion(request_messages, base_url, model),
+                        "Generating with {} ({})".format(model, connection_status),
+                    )
                 else:
-                    answer = chat_completion(request_messages, api_key, base_url, model)
+                    answer = run_with_progress(
+                        lambda: chat_completion(request_messages, api_key, base_url, model),
+                        "Generating with {} ({})".format(model, connection_status),
+                    )
             except (urllib.error.URLError, urllib.error.HTTPError, KeyError, IndexError, ValueError) as error:
                 messages.pop()
                 print(".cmdAI error: {}".format(error), file=sys.stderr)
@@ -341,6 +446,12 @@ def main(argv=None):
                     )
                 continue
             messages.append({"role": "assistant", "content": answer})
+            if conversation_path is None:
+                conversation_path = new_conversation_path(history_directory)
+            try:
+                save_conversation(conversation_path, args.provider, model, messages)
+            except OSError as error:
+                print(".cmdAI warning: could not save conversation: {}".format(error), file=sys.stderr)
             if spaced_replies:
                 print()
             print(".cmdAI> {}".format(answer))

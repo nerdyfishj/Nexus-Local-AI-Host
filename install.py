@@ -5,11 +5,19 @@ import shlex
 import struct
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
 SCRIPT = ROOT / "cmdai.py"
+
+
+def icon_path():
+    source_icon = ROOT / "cmdAI.ico"
+    if source_icon.is_file():
+        return source_icon
+    return Path(sysconfig.get_path("data")) / "share" / "cmdai" / "cmdAI.ico"
 
 
 def png_data_from_icon(icon_path):
@@ -34,7 +42,7 @@ def png_data_from_icon(icon_path):
 
 
 def write_logo_png(image_path):
-    image_path.write_bytes(png_data_from_icon(ROOT / "cmdAI.ico"))
+    image_path.write_bytes(png_data_from_icon(icon_path()))
 
 
 def desktop_directory():
@@ -49,7 +57,7 @@ def desktop_directory():
 
 def install_windows(desktop):
     shortcut = desktop / ".cmdAI.lnk"
-    icon_path = ROOT / "cmdAI.ico"
+    icon = icon_path()
     quote = lambda value: "'{}'".format(str(value).replace("'", "''"))
     command = (
         "$shell = New-Object -ComObject WScript.Shell; "
@@ -61,7 +69,7 @@ def install_windows(desktop):
         quote(sys.executable),
         quote('"{}"'.format(SCRIPT)),
         quote(ROOT),
-        quote("{},0".format(icon_path)),
+        quote("{},0".format(icon)),
     )
     subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
@@ -108,6 +116,8 @@ def install_unix(desktop):
     else:
         shortcut = desktop / "cmdAI.desktop"
         logo_path = ROOT / "cmdAI.png"
+        if not (ROOT / "cmdAI.ico").is_file():
+            logo_path = desktop / "cmdAI.png"
         write_logo_png(logo_path)
         escape = lambda value: str(value).replace("\\", "\\\\").replace('"', '\\"')
         contents = (
