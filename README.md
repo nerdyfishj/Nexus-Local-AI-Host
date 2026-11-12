@@ -18,6 +18,8 @@ python install.py
 
 This creates a `.cmdAI` desktop launcher (`.cmdAI.lnk` on Windows, `cmdAI.desktop` on Linux, or a visible `cmdAI.app` on macOS with the display name `.cmdAI`). Repository downloads do not automatically execute installer code; running this command is the step that creates the shortcut.
 
+On Windows, the shortcut launches this folder's Python interpreter and `cmdai.py` directly; GitHub Desktop is not required. If you move the repository, run `python install.py` again from its new location to update the shortcut.
+
 Install Ollama from [ollama.com](https://ollama.com), start it, and download a model:
 
 ```text
