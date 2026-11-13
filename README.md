@@ -119,7 +119,6 @@ While each response is generating, .cmdAI shows a live progress indicator with t
 - `/coding on|off|status [model]` enables coding-focused instructions and selects a coding model.
 - `/search <query>` searches DuckDuckGo and asks the configured model to answer using the results.
 - `/folder`, `/files`, `/explorer`, `/notepad`, and `/readfile` provide selected-folder tools on Windows.
-- `/dev on|off|status` enables or disables password-protected developer tools.
 - `/exit` or `/quit` ends the chat.
 
 Ollama model commands work with the Ollama provider. For example, use `/models` to see installed models, `/pull qwen2.5:7b` to download one (and confirm the prompt), then `/model qwen2.5:7b` to use it for the current session. Model downloads are not automatic, and model deletion is not currently supported.
@@ -140,23 +139,7 @@ These commands are explicit and are currently available only on Windows:
 
 Paths must stay inside the selected folder. These tools do not delete files or let the AI operate the desktop autonomously. Use Notepad for edits; the AI does not automatically write changes to files.
 
-Training examples are not model-weight training. They are stored locally in `~/.cmdai/training_examples.json` and up to three keyword-matched examples are included with relevant requests. Set `CMD_AI_TRAINING_FILE` to choose another storage path. Each conversation is automatically saved as a JSON file in `~/.cmdai/conversations` (`%USERPROFILE%\.cmdai\conversations` on Windows). Use `/history` to see the folder and saved conversation filenames. Set `CMD_AI_CONVERSATIONS_DIR` to use a different folder. Files contain user and assistant messages, not system instructions or API keys; they may still include private text, so protect the folder accordingly. Conversation context is also sent to the configured API with each request. You can customize the startup model and system instructions with `--model` and `--system`, or with `CMD_AI_MODEL` and `CMD_AI_SYSTEM_PROMPT`.
-
-## Developer Mode
-
-Set `CMD_AI_DEV_PASSWORD` in the environment before launching `.cmdAI`, then use `/dev on` and enter the password when prompted. Password input is hidden and the application does not store the password. Do not commit it to the repository. This is a local convenience gate, not a security boundary against other programs or users with access to the same account.
-
-While enabled, developer tools include:
-
-- `/system [instructions]` to inspect or change session instructions.
-- `/update` to update a pipx installation from within the chat.
-- `/history` to list locally saved conversations.
-- `/trainmodel` to save a prompt and preferred response; `/trainmodel list` shows examples, and `/trainmodel clear` removes them.
-- `/debug` for provider, model, context count, example count, and spacing status.
-- `/context` for message sizes and a rough token estimate.
-- `/export <new-file-path>` to save the current conversation as JSON without overwriting an existing file.
-
-Use `/dev off` to relock the tools. Training examples and exported conversations may contain private text; keep those files in an appropriate location.
+Each conversation is automatically saved as a JSON file in `~/.cmdai/conversations` (`%USERPROFILE%\.cmdai\conversations` on Windows). Use `/history` to see the folder and saved conversation filenames. Set `CMD_AI_CONVERSATIONS_DIR` to use a different folder. Files contain user and assistant messages, not system instructions or API keys; they may still include private text, so protect the folder accordingly. Conversation context is also sent to the configured API with each request. You can customize the startup model and system instructions with `--model` and `--system`, or with `CMD_AI_MODEL` and `CMD_AI_SYSTEM_PROMPT`.
 
 ## Verify
 

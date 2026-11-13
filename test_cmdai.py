@@ -639,28 +639,25 @@ class ChatCompletionTests(unittest.TestCase):
 
     def test_terminal_commands_customize_chat_without_being_sent_as_prompts(self):
         prompts = [
-            "/dev on",
             "/model custom-model",
-            "/system Be concise.",
             "First question",
             "/clear",
             "/spacing off",
             "Second question",
             "/exit",
         ]
-        with patch.dict(os.environ, {"CMD_AI_DEV_PASSWORD": "test-password"}, clear=True):
+        with patch.dict(os.environ, {}, clear=True):
             with patch("builtins.input", side_effect=prompts):
-                with patch("cmdai.getpass.getpass", return_value="test-password"):
-                    with patch("cmdai.ollama_chat_completion", return_value="Answer") as completion:
-                        self.assertEqual(cmdai.main([]), 0)
+                with patch("cmdai.ollama_chat_completion", return_value="Answer") as completion:
+                    self.assertEqual(cmdai.main([]), 0)
 
         self.assertEqual(completion.call_count, 2)
         first_messages = completion.call_args_list[0].args[0]
         self.assertEqual(completion.call_args_list[0].args[2], "custom-model")
-        self.assertEqual(first_messages[0]["content"], "Be concise.")
+        self.assertEqual(first_messages[0]["content"], cmdai.DEFAULT_SYSTEM_PROMPT)
         second_messages = completion.call_args_list[1].args[0]
         self.assertEqual([message["content"] for message in second_messages], [
-            "Be concise.", "Second question", "Answer"
+            cmdai.DEFAULT_SYSTEM_PROMPT, "Second question", "Answer"
         ])
 
     def test_compact_flag_removes_extra_reply_spacing(self):
@@ -684,92 +681,33 @@ class ChatCompletionTests(unittest.TestCase):
         self.assertEqual(user_input.call_args_list[0].args, ("\nyou> ",))
         self.assertEqual(user_input.call_args_list[1].args, ("\nyou> ",))
 
-    def test_trainmodel_saves_examples_and_uses_matching_example(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            training_path = Path(temporary_directory) / "examples.json"
-            prompts = [
-                "/dev on",
-                "/trainmodel",
-                "How should Python errors be explained?",
-                "Explain the cause first, then show a small fix.",
-                "How do I explain Python errors?",
-                "/exit",
-            ]
-            with patch.dict(os.environ, {
-                "CMD_AI_TRAINING_FILE": str(training_path),
-                "CMD_AI_DEV_PASSWORD": "test-password",
-            }, clear=True):
-                with patch("builtins.input", side_effect=prompts):
-                    with patch("cmdai.getpass.getpass", return_value="test-password"):
-                        with patch("cmdai.ollama_chat_completion", return_value="Answer") as completion:
-                            self.assertEqual(cmdai.main([]), 0)
-
-            saved_examples = json.loads(training_path.read_text(encoding="utf-8"))
-
-        self.assertEqual(saved_examples, [{
-            "prompt": "How should Python errors be explained?",
-            "response": "Explain the cause first, then show a small fix.",
-        }])
-        request_messages = completion.call_args.args[0]
-        self.assertEqual(request_messages[1]["role"], "system")
-        self.assertIn("Explain the cause first, then show a small fix.", request_messages[1]["content"])
-
-    def test_irrelevant_training_examples_are_not_included(self):
-        messages = [
-            {"role": "system", "content": "Be concise."},
-            {"role": "user", "content": "How do I bake bread?"},
-        ]
-        examples = [{"prompt": "Debug Python errors", "response": "Check the traceback."}]
-
-        self.assertIs(cmdai.messages_with_training_examples(messages, examples), messages)
-
-    def test_developer_tools_reject_incorrect_password(self):
+    def test_private_commands_are_absent_without_local_extension(self):
         output = io.StringIO()
-        prompts = ["/dev on", "/trainmodel", "/exit"]
-        with patch.dict(os.environ, {"CMD_AI_DEV_PASSWORD": "correct"}, clear=True):
-            with patch("builtins.input", side_effect=prompts):
-                with patch("cmdai.getpass.getpass", return_value="incorrect"):
-                    with patch("cmdai.ollama_chat_completion") as completion:
-                        with redirect_stdout(output):
-                            self.assertEqual(cmdai.main([]), 0)
-
-        completion.assert_not_called()
-        self.assertIn("Incorrect password.", output.getvalue())
-        self.assertIn("Developer mode is off", output.getvalue())
-
-    def test_developer_mode_unlocks_diagnostics_and_export(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             export_path = Path(temporary_directory) / "session.json"
             prompts = [
                 "/dev on",
+                "/system private instructions",
+                "/trainmodel",
                 "/debug",
                 "/context",
-                "/model dev-model",
-                "A test question",
                 "/export {}".format(export_path),
-                "/dev off",
-                "/model blocked-model",
                 "/exit",
             ]
-            output = io.StringIO()
-            with patch.dict(os.environ, {"CMD_AI_DEV_PASSWORD": "test-password"}, clear=True):
-                with patch("builtins.input", side_effect=prompts):
-                    with patch("cmdai.getpass.getpass", return_value="test-password"):
-                        with patch("cmdai.ollama_chat_completion", return_value="Answer") as completion:
+            with patch.dict(os.environ, {}, clear=True):
+                with patch("cmdai.load_private_developer", return_value=None):
+                    with patch("builtins.input", side_effect=prompts):
+                        with patch("cmdai.ollama_chat_completion") as completion:
                             with redirect_stdout(output):
                                 self.assertEqual(cmdai.main([]), 0)
 
-            exported = json.loads(export_path.read_text(encoding="utf-8"))
+            self.assertFalse(export_path.exists())
 
-        self.assertEqual(completion.call_args.args[2], "dev-model")
-        self.assertEqual(exported["model"], "dev-model")
-        self.assertEqual([message["role"] for message in exported["messages"]], [
-            "system", "user", "assistant"
-        ])
-        self.assertIn("Developer mode enabled.", output.getvalue())
-        self.assertIn("Conversation context:", output.getvalue())
-        self.assertIn("Developer mode is off.", output.getvalue())
-        self.assertIn("Model: blocked-model", output.getvalue())
+        completion.assert_not_called()
+        for command in ("/dev", "/system", "/trainmodel", "/debug", "/context", "/export"):
+            self.assertIn("Unknown command: {}".format(command), output.getvalue())
+        self.assertNotIn("Developer mode enabled.", output.getvalue())
+
 
 
 if __name__ == "__main__":
