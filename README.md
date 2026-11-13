@@ -112,6 +112,7 @@ Prompts and replies are spaced out by default; start with `--compact` or use `/s
 While each response is generating, .cmdAI shows a live progress indicator with the model name and whether it detected an internet connection. This check does not send your prompt or API key.
 
 - `/clear` starts a fresh conversation while keeping your system instructions.
+- `/setup` runs the Ollama model recommendation wizard from the chat.
 - `/models` lists installed Ollama models and marks the active model.
 - `/model [name]` shows or switches the model for the current session.
 - `/pull <name>` downloads an Ollama model after confirmation.

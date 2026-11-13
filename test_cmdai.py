@@ -176,6 +176,35 @@ class ChatCompletionTests(unittest.TestCase):
         setup.assert_called_once_with()
         getpass_prompt.assert_not_called()
 
+    def test_setup_wizard_in_chat_recommends_session_model_command(self):
+        output = io.StringIO()
+        with patch("cmdai.system_memory_gb", return_value=4):
+            with patch("cmdai.nvidia_memory_gb", return_value=None):
+                with patch("cmdai.shutil.which", return_value=None):
+                    with redirect_stdout(output):
+                        self.assertEqual(cmdai.run_setup_wizard(in_chat=True), 0)
+
+        self.assertIn("Use /model llama3.2:1b to switch models in this chat.", output.getvalue())
+
+    def test_setup_chat_command_runs_wizard_only_with_ollama(self):
+        prompts = ["/setup", "/exit"]
+        with patch("builtins.input", side_effect=prompts):
+            with patch("cmdai.run_setup_wizard", return_value=0) as setup:
+                self.assertEqual(cmdai.main(["--compact"]), 0)
+
+        setup.assert_called_once_with(in_chat=True)
+
+    def test_setup_chat_command_rejects_openai_provider(self):
+        output = io.StringIO()
+        with patch.dict(os.environ, {"CMD_AI_API_KEY": "test-key"}, clear=True):
+            with patch("builtins.input", side_effect=["/setup", "/exit"]):
+                with patch("cmdai.run_setup_wizard") as setup:
+                    with redirect_stdout(output):
+                        self.assertEqual(cmdai.main(["--provider", "openai"]), 0)
+
+        setup.assert_not_called()
+        self.assertIn("Model setup is available only with --provider ollama.", output.getvalue())
+
     def test_ollama_model_list_returns_names_and_sizes(self):
         class Response:
             def __enter__(self):

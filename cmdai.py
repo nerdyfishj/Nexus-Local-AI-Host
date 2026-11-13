@@ -106,7 +106,7 @@ def recommend_model(ram_gb, gpu_gb=None):
     return model, reason
 
 
-def run_setup_wizard(input_fn=None):
+def run_setup_wizard(input_fn=None, in_chat=False):
     """Recommend a local Ollama model and optionally download it."""
     if input_fn is None:
         input_fn = input
@@ -126,11 +126,16 @@ def run_setup_wizard(input_fn=None):
     model, reason = recommend_model(ram_gb, gpu_gb)
     print("Recommended model: {} (based on {}).".format(model, reason))
     print("These are rough estimates for quantized models; actual speed and memory use vary.")
+    model_instruction = (
+        "Use /model {} to switch models in this chat.".format(model)
+        if in_chat
+        else "Start .cmdAI with: cmdai --model {}".format(model)
+    )
     ollama = shutil.which("ollama")
     if not ollama:
         print("Install Ollama to download and run this model: https://ollama.com")
         print("After installing it, run: ollama pull {}".format(model))
-        print("Then start .cmdAI with: cmdai --model {}".format(model))
+        print(model_instruction)
         return 0
 
     try:
@@ -139,7 +144,7 @@ def run_setup_wizard(input_fn=None):
         answer = "n"
     if answer not in ("", "y", "yes"):
         print("No model downloaded. To use it later, run: ollama pull {}".format(model))
-        print("Start .cmdAI with: cmdai --model {}".format(model))
+        print(model_instruction)
         return 0
 
     print("Downloading {}...".format(model))
@@ -151,7 +156,7 @@ def run_setup_wizard(input_fn=None):
     if result.returncode != 0:
         print(".cmdAI error: Ollama could not download {}.".format(model), file=sys.stderr)
         return 1
-    print("Download complete. Start .cmdAI with: cmdai --model {}".format(model))
+    print("Download complete. {}".format(model_instruction))
     return 0
 
 
@@ -489,7 +494,7 @@ def main(argv=None):
                     print("Developer mode is off. Use /dev on to unlock this tool.")
                 elif command == "/help":
                     print(
-                        "Commands: /help, /exit, /clear, /history, /models, /model [name], "
+                        "Commands: /help, /exit, /clear, /history, /setup, /models, /model [name], "
                         "/pull <name>, /update, /spacing on|off, /dev on|off|status"
                     )
                     if developer_mode:
@@ -519,6 +524,11 @@ def main(argv=None):
                     import cmdai_update
 
                     cmdai_update.main()
+                elif command == "/setup":
+                    if args.provider != "ollama":
+                        print("Model setup is available only with --provider ollama.")
+                    else:
+                        run_setup_wizard(in_chat=True)
                 elif command == "/models":
                     if args.provider != "ollama":
                         print("Ollama model management is available only with --provider ollama.")
