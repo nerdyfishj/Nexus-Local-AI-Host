@@ -130,6 +130,14 @@ class ChatCompletionTests(unittest.TestCase):
             "qwen2.5:32b", "your detected NVIDIA GPU memory"
         ))
 
+    def test_coding_model_recommendation_uses_ram_and_nvidia_memory(self):
+        self.assertEqual(cmdai.recommend_coding_model(8), (
+            "qwen2.5-coder:3b", "your system memory"
+        ))
+        self.assertEqual(cmdai.recommend_coding_model(8, 24), (
+            "qwen2.5-coder:32b", "your detected NVIDIA GPU memory"
+        ))
+
     def test_setup_wizard_downloads_only_after_confirmation(self):
         output = io.StringIO()
         with patch("cmdai.system_memory_gb", return_value=16):
@@ -205,6 +213,89 @@ class ChatCompletionTests(unittest.TestCase):
         setup.assert_not_called()
         self.assertIn("Model setup is available only with --provider ollama.", output.getvalue())
 
+    def test_selected_folder_rejects_paths_outside_root(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = cmdai.validate_selected_folder(temporary_directory)
+            self.assertEqual(cmdai.resolve_selected_path(root, "notes.txt"), os.path.join(root, "notes.txt"))
+            with self.assertRaisesRegex(ValueError, "inside the selected folder"):
+                cmdai.resolve_selected_path(root, os.path.join("..", "outside.txt"))
+
+    def test_selected_text_file_requires_utf8_and_size_limit(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            Path(temporary_directory, "notes.txt").write_text("private note", encoding="utf-8")
+            _, contents = cmdai.read_selected_text_file(temporary_directory, "notes.txt")
+            self.assertEqual(contents, "private note")
+
+            Path(temporary_directory, "binary.txt").write_bytes(b"\xff")
+            with self.assertRaisesRegex(ValueError, "UTF-8"):
+                cmdai.read_selected_text_file(temporary_directory, "binary.txt")
+
+            Path(temporary_directory, "large.txt").write_bytes(
+                b"x" * (cmdai.MAX_SELECTED_TEXT_FILE_BYTES + 1)
+            )
+            with self.assertRaisesRegex(ValueError, "1 MiB"):
+                cmdai.read_selected_text_file(temporary_directory, "large.txt")
+
+    def test_readfile_context_is_confirmed_one_request_and_not_saved(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "notes.txt").write_text("private file contents", encoding="utf-8")
+            output = io.StringIO()
+            prompts = [
+                "/folder {}".format(root),
+                "/files",
+                "/readfile notes.txt",
+                "n",
+                "/readfile notes.txt",
+                "y",
+                "Summarize this file.",
+                "What did I ask you before?",
+                "/exit",
+            ]
+            with patch("cmdai.sys.platform", "win32"):
+                with patch("builtins.input", side_effect=prompts):
+                    with patch("cmdai.ollama_chat_completion", side_effect=["Summary", "Follow-up"]) as completion:
+                        with redirect_stdout(output):
+                            self.assertEqual(cmdai.main(["--compact"]), 0)
+
+            first_request = completion.call_args_list[0].args[0]
+            second_request = completion.call_args_list[1].args[0]
+            saved_conversation = json.loads(
+                Path(cmdai.list_conversations(self.test_conversation_directory.name)[0]).read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertIn("private file contents", first_request[1]["content"])
+        self.assertNotIn("private file contents", json.dumps(second_request))
+        self.assertNotIn("private file contents", json.dumps(saved_conversation))
+        self.assertIn("notes.txt", output.getvalue())
+        self.assertIn("File was not shared.", output.getvalue())
+        self.assertIn("File loaded into the next request.", output.getvalue())
+
+    def test_notepad_and_explorer_are_limited_to_selected_folder(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = io.StringIO()
+            prompts = [
+                "/folder {}".format(root),
+                "/notepad new.txt",
+                "y",
+                "/explorer",
+                "/exit",
+            ]
+            with patch("cmdai.sys.platform", "win32"):
+                with patch("builtins.input", side_effect=prompts):
+                    with patch("cmdai.subprocess.Popen") as popen:
+                        with redirect_stdout(output):
+                            self.assertEqual(cmdai.main(["--compact"]), 0)
+
+            self.assertTrue((root / "new.txt").is_file())
+            self.assertEqual(popen.call_args_list[0].args[0], ["notepad.exe", str(root / "new.txt")])
+            self.assertEqual(popen.call_args_list[1].args[0], ["explorer.exe", str(root)])
+            self.assertIn("Opened Notepad:", output.getvalue())
+            self.assertIn("Opened File Explorer:", output.getvalue())
+
     def test_ollama_model_list_returns_names_and_sizes(self):
         class Response:
             def __enter__(self):
@@ -259,6 +350,115 @@ class ChatCompletionTests(unittest.TestCase):
         with patch("cmdai.urllib.request.urlopen", return_value=Response()):
             with self.assertRaisesRegex(ValueError, "without confirming success"):
                 cmdai.ollama_pull_model("llama3.2:3b", "http://localhost:11434")
+
+    def test_coding_model_wizard_recommends_installed_model(self):
+        output = io.StringIO()
+        with patch("cmdai.system_memory_gb", return_value=16):
+            with patch("cmdai.nvidia_memory_gb", return_value=None):
+                with patch(
+                    "cmdai.ollama_list_models",
+                    return_value=[("qwen2.5-coder:7b", 7 * 1024 ** 3)],
+                ):
+                    with redirect_stdout(output):
+                        model = cmdai.run_coding_model_wizard("http://localhost:11434")
+
+        self.assertEqual(model, "qwen2.5-coder:7b")
+        self.assertIn("Recommended coding model: qwen2.5-coder:7b", output.getvalue())
+
+    def test_coding_model_wizard_only_downloads_after_confirmation(self):
+        with patch("cmdai.system_memory_gb", return_value=16):
+            with patch("cmdai.nvidia_memory_gb", return_value=None):
+                with patch("cmdai.ollama_list_models", return_value=[]):
+                    with patch("cmdai.ollama_pull_model") as pull_model:
+                        self.assertIsNone(cmdai.run_coding_model_wizard(
+                            "http://localhost:11434",
+                            input_fn=lambda prompt: "n",
+                        ))
+        pull_model.assert_not_called()
+
+        with patch("cmdai.system_memory_gb", return_value=16):
+            with patch("cmdai.nvidia_memory_gb", return_value=None):
+                with patch("cmdai.ollama_list_models", return_value=[]):
+                    with patch("cmdai.ollama_pull_model") as pull_model:
+                        model = cmdai.run_coding_model_wizard(
+                            "http://localhost:11434",
+                            input_fn=lambda prompt: "yes",
+                        )
+
+        self.assertEqual(model, "qwen2.5-coder:7b")
+        pull_model.assert_called_once_with(
+            "qwen2.5-coder:7b", "http://localhost:11434", cmdai.print_ollama_pull_progress
+        )
+
+    def test_web_search_parses_duckduckgo_results(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, size):
+                return (
+                    b'<a class="result__a" href="//duckduckgo.com/l/?uddg='
+                    b'https%3A%2F%2Fexample.com%2Fguide">Example guide</a>'
+                    b'<a class="result__snippet">A useful summary.</a>'
+                )
+
+        with patch("cmdai.urllib.request.urlopen", return_value=Response()) as urlopen:
+            results = cmdai.web_search("python testing")
+
+        self.assertEqual(results, [{
+            "title": "Example guide",
+            "url": "https://example.com/guide",
+            "snippet": "A useful summary.",
+        }])
+        self.assertIn("python+testing", urlopen.call_args.args[0].full_url)
+
+    def test_search_command_sends_search_results_to_model_once(self):
+        output = io.StringIO()
+        search_results = [{
+            "title": "Python docs",
+            "url": "https://docs.example.test/python",
+            "snippet": "Official Python documentation.",
+        }]
+        with patch("builtins.input", side_effect=["/search Python docs", "/exit"]):
+            with patch("cmdai.web_search", return_value=search_results):
+                with patch("cmdai.ollama_chat_completion", return_value="See the docs.") as completion:
+                    with redirect_stdout(output):
+                        self.assertEqual(cmdai.main(["--compact"]), 0)
+
+        request_messages = completion.call_args.args[0]
+        self.assertIn("Official Python documentation.", request_messages[1]["content"])
+        self.assertEqual(request_messages[-1], {"role": "user", "content": "Python docs"})
+        self.assertIn("https://docs.example.test/python", output.getvalue())
+
+    def test_coding_mode_switches_model_and_restores_chat_settings(self):
+        prompts = [
+            "/coding on",
+            "Write a test.",
+            "/coding off",
+            "Regular chat.",
+            "/exit",
+        ]
+        requests = []
+
+        def capture_completion(messages, base_url, model):
+            requests.append((json.loads(json.dumps(messages)), model))
+            return "Code answer" if model == "qwen2.5-coder:7b" else "Chat answer"
+
+        with patch("builtins.input", side_effect=prompts):
+            with patch("cmdai.run_coding_model_wizard", return_value="qwen2.5-coder:7b") as wizard:
+                with patch("cmdai.ollama_chat_completion", side_effect=capture_completion):
+                    self.assertEqual(cmdai.main(["--system", "Be concise.", "--compact"]), 0)
+
+        wizard.assert_called_once_with(cmdai.DEFAULT_OLLAMA_BASE_URL, None)
+        first_messages, first_model = requests[0]
+        second_messages, second_model = requests[1]
+        self.assertEqual(first_model, "qwen2.5-coder:7b")
+        self.assertIn("Coding mode is enabled.", first_messages[0]["content"])
+        self.assertEqual(second_model, "llama3.1:8b")
+        self.assertEqual(second_messages[0]["content"], "Be concise.")
 
     def test_ollama_model_commands_list_switch_and_confirm_download(self):
         output = io.StringIO()

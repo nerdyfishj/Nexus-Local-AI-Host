@@ -116,10 +116,29 @@ While each response is generating, .cmdAI shows a live progress indicator with t
 - `/models` lists installed Ollama models and marks the active model.
 - `/model [name]` shows or switches the model for the current session.
 - `/pull <name>` downloads an Ollama model after confirmation.
+- `/coding on|off|status [model]` enables coding-focused instructions and selects a coding model.
+- `/search <query>` searches DuckDuckGo and asks the configured model to answer using the results.
+- `/folder`, `/files`, `/explorer`, `/notepad`, and `/readfile` provide selected-folder tools on Windows.
 - `/dev on|off|status` enables or disables password-protected developer tools.
 - `/exit` or `/quit` ends the chat.
 
 Ollama model commands work with the Ollama provider. For example, use `/models` to see installed models, `/pull qwen2.5:7b` to download one (and confirm the prompt), then `/model qwen2.5:7b` to use it for the current session. Model downloads are not automatic, and model deletion is not currently supported.
+
+`/coding on` checks system memory and detectable NVIDIA GPU memory, recommends a Qwen2.5-Coder model, and asks before downloading it if it is not installed. Use `/coding on <model-name>` to select a different coding model, `/coding status` to check the mode, and `/coding off` to restore the prior model and system instructions. This switches models and adds coding-focused instructions; it does not run code or edit files.
+
+`/search <query>` sends the query to DuckDuckGo, then sends up to five result titles, URLs, and snippets to the configured AI provider for an answer. You do not need to install DuckDuckGo, but you need an internet connection. Search queries go to DuckDuckGo, and result snippets go to your selected AI provider. The search context is used for that answer and is not saved in local conversation history.
+
+### Windows file and desktop tools
+
+These commands are explicit and are currently available only on Windows:
+
+- `/folder <absolute-path>` selects the folder the tools may access; `/folder off` clears it.
+- `/files [relative-folder]` lists entries in the selected folder.
+- `/explorer [relative-folder]` opens the selected folder or a subfolder in File Explorer.
+- `/notepad <relative-file>` opens a file in Notepad. Creating a new empty file requires confirmation.
+- `/readfile <relative-text-file>` asks before sharing a UTF-8 text file (up to 1 MiB) with the configured AI provider. The contents are included only in the next request and are not saved to local conversation history.
+
+Paths must stay inside the selected folder. These tools do not delete files or let the AI operate the desktop autonomously. Use Notepad for edits; the AI does not automatically write changes to files.
 
 Training examples are not model-weight training. They are stored locally in `~/.cmdai/training_examples.json` and up to three keyword-matched examples are included with relevant requests. Set `CMD_AI_TRAINING_FILE` to choose another storage path. Each conversation is automatically saved as a JSON file in `~/.cmdai/conversations` (`%USERPROFILE%\.cmdai\conversations` on Windows). Use `/history` to see the folder and saved conversation filenames. Set `CMD_AI_CONVERSATIONS_DIR` to use a different folder. Files contain user and assistant messages, not system instructions or API keys; they may still include private text, so protect the folder accordingly. Conversation context is also sent to the configured API with each request. You can customize the startup model and system instructions with `--model` and `--system`, or with `CMD_AI_MODEL` and `CMD_AI_SYSTEM_PROMPT`.
 
