@@ -120,6 +120,145 @@ class ChatCompletionTests(unittest.TestCase):
             "stream": False,
         })
 
+    def test_model_recommendation_uses_ram_and_nvidia_memory(self):
+        self.assertEqual(cmdai.recommend_model(2), (
+            "llama3.2:1b", "the smallest available option for a low-memory system"
+        ))
+        self.assertEqual(cmdai.recommend_model(8), ("llama3.2:3b", "your system memory"))
+        self.assertEqual(cmdai.recommend_model(16), ("llama3.1:8b", "your system memory"))
+        self.assertEqual(cmdai.recommend_model(8, 24), (
+            "qwen2.5:32b", "your detected NVIDIA GPU memory"
+        ))
+
+    def test_setup_wizard_downloads_only_after_confirmation(self):
+        output = io.StringIO()
+        with patch("cmdai.system_memory_gb", return_value=16):
+            with patch("cmdai.nvidia_memory_gb", return_value=None):
+                with patch("cmdai.shutil.which", return_value="ollama"):
+                    with patch("cmdai.subprocess.run", return_value=type("Result", (), {"returncode": 0})()) as run:
+                        with redirect_stdout(output):
+                            self.assertEqual(cmdai.run_setup_wizard(lambda prompt: "y"), 0)
+
+        run.assert_called_once_with(["ollama", "pull", "llama3.1:8b"], check=False)
+        self.assertIn("Recommended model: llama3.1:8b", output.getvalue())
+        self.assertIn("Download complete.", output.getvalue())
+
+    def test_setup_wizard_does_not_download_without_confirmation(self):
+        output = io.StringIO()
+        with patch("cmdai.system_memory_gb", return_value=16):
+            with patch("cmdai.nvidia_memory_gb", return_value=None):
+                with patch("cmdai.shutil.which", return_value="ollama"):
+                    with patch("cmdai.subprocess.run") as run:
+                        with redirect_stdout(output):
+                            self.assertEqual(cmdai.run_setup_wizard(lambda prompt: "n"), 0)
+
+        run.assert_not_called()
+        self.assertIn("No model downloaded.", output.getvalue())
+
+    def test_setup_wizard_without_ollama_only_suggests_model(self):
+        output = io.StringIO()
+        with patch("cmdai.system_memory_gb", return_value=8):
+            with patch("cmdai.nvidia_memory_gb", return_value=None):
+                with patch("cmdai.shutil.which", return_value=None):
+                    with patch("cmdai.subprocess.run") as run:
+                        with redirect_stdout(output):
+                            self.assertEqual(cmdai.run_setup_wizard(), 0)
+
+        run.assert_not_called()
+        self.assertIn("Recommended model: llama3.2:3b", output.getvalue())
+        self.assertIn("Install Ollama", output.getvalue())
+
+    def test_setup_flag_runs_before_openai_api_key_prompt(self):
+        with patch("cmdai.run_setup_wizard", return_value=0) as setup:
+            with patch("cmdai.getpass.getpass") as getpass_prompt:
+                self.assertEqual(cmdai.main(["--provider", "openai", "--setup"]), 0)
+
+        setup.assert_called_once_with()
+        getpass_prompt.assert_not_called()
+
+    def test_ollama_model_list_returns_names_and_sizes(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"models":[{"name":"llama3.2:3b","size":3221225472}]}'
+
+        with patch("cmdai.urllib.request.urlopen", return_value=Response()) as urlopen:
+            models = cmdai.ollama_list_models("http://localhost:11434/")
+
+        self.assertEqual(models, [("llama3.2:3b", 3221225472)])
+        self.assertEqual(urlopen.call_args.args[0].full_url, "http://localhost:11434/api/tags")
+
+    def test_ollama_model_pull_reports_streamed_status_and_success(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def __iter__(self):
+                return iter([
+                    b'{"status":"pulling model"}\n',
+                    b'{"status":"success"}\n',
+                ])
+
+        updates = []
+        with patch("cmdai.urllib.request.urlopen", return_value=Response()) as urlopen:
+            cmdai.ollama_pull_model("llama3.2:3b", "http://localhost:11434", updates.append)
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://localhost:11434/api/pull")
+        self.assertEqual(json.loads(request.data), {"name": "llama3.2:3b", "stream": True})
+        self.assertEqual([update["status"] for update in updates], ["pulling model", "success"])
+
+    def test_ollama_model_pull_rejects_incomplete_response(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def __iter__(self):
+                return iter([b'{"status":"pulling model"}\n'])
+
+        with patch("cmdai.urllib.request.urlopen", return_value=Response()):
+            with self.assertRaisesRegex(ValueError, "without confirming success"):
+                cmdai.ollama_pull_model("llama3.2:3b", "http://localhost:11434")
+
+    def test_ollama_model_commands_list_switch_and_confirm_download(self):
+        output = io.StringIO()
+        prompts = [
+            "/models",
+            "/model llama3.2:3b",
+            "/pull qwen2.5:7b",
+            "n",
+            "/pull qwen2.5:7b",
+            "y",
+            "Hi",
+            "/exit",
+        ]
+        with patch("builtins.input", side_effect=prompts):
+            with patch(
+                "cmdai.ollama_list_models", return_value=[("llama3.1:8b", 8 * 1024 ** 3)]
+            ):
+                with patch("cmdai.ollama_pull_model") as pull_model:
+                    with patch("cmdai.ollama_chat_completion", return_value="Hello") as completion:
+                        with redirect_stdout(output):
+                            self.assertEqual(cmdai.main(["--compact"]), 0)
+
+        pull_model.assert_called_once()
+        self.assertEqual(pull_model.call_args.args[:2], ("qwen2.5:7b", cmdai.DEFAULT_OLLAMA_BASE_URL))
+        self.assertEqual(completion.call_args.args[2], "llama3.2:3b")
+        self.assertIn("llama3.1:8b (current) - 8.0 GiB", output.getvalue())
+        self.assertIn("Model download cancelled.", output.getvalue())
+        self.assertIn("Model 'qwen2.5:7b' is ready.", output.getvalue())
+
     def test_posts_messages_and_returns_assistant_text(self):
         class Response:
             def __enter__(self):
@@ -400,7 +539,8 @@ class ChatCompletionTests(unittest.TestCase):
         ])
         self.assertIn("Developer mode enabled.", output.getvalue())
         self.assertIn("Conversation context:", output.getvalue())
-        self.assertIn("Developer mode is off. Use /dev on", output.getvalue())
+        self.assertIn("Developer mode is off.", output.getvalue())
+        self.assertIn("Model: blocked-model", output.getvalue())
 
 
 if __name__ == "__main__":

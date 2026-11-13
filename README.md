@@ -35,6 +35,16 @@ cmdai-install
 
 This installs `.cmdAI` in an isolated Python environment and creates a desktop launcher (`.cmdAI.lnk` on Windows, `cmdAI.desktop` on Linux, or `cmdAI.app` on macOS). Opening the launcher starts the chat in a terminal on each OS: Windows opens the Python console, Linux uses the desktop terminal, and macOS opens Terminal. To start it directly from any terminal instead, run `cmdai`.
 
+### Choose a model for your computer
+
+Run the setup wizard from a terminal:
+
+```sh
+cmdai --setup
+```
+
+From a local checkout, use `python cmdai.py --setup` (or `py cmdai.py --setup` on Windows). The wizard estimates a model using system memory and, when `nvidia-smi` is available, NVIDIA GPU memory. Estimates are approximate; other GPU types may not be detected. If Ollama is installed, the wizard asks before downloading the recommendation. It does not change the default model. To use the recommendation, start chat with the model it prints, for example `cmdai --model llama3.1:8b`.
+
 ### Install from a local checkout
 
 Clone or download this repository into a permanent folder, then run the installer once:
@@ -102,8 +112,13 @@ Prompts and replies are spaced out by default; start with `--compact` or use `/s
 While each response is generating, .cmdAI shows a live progress indicator with the model name and whether it detected an internet connection. This check does not send your prompt or API key.
 
 - `/clear` starts a fresh conversation while keeping your system instructions.
+- `/models` lists installed Ollama models and marks the active model.
+- `/model [name]` shows or switches the model for the current session.
+- `/pull <name>` downloads an Ollama model after confirmation.
 - `/dev on|off|status` enables or disables password-protected developer tools.
 - `/exit` or `/quit` ends the chat.
+
+Ollama model commands work with the Ollama provider. For example, use `/models` to see installed models, `/pull qwen2.5:7b` to download one (and confirm the prompt), then `/model qwen2.5:7b` to use it for the current session. Model downloads are not automatic, and model deletion is not currently supported.
 
 Training examples are not model-weight training. They are stored locally in `~/.cmdai/training_examples.json` and up to three keyword-matched examples are included with relevant requests. Set `CMD_AI_TRAINING_FILE` to choose another storage path. Each conversation is automatically saved as a JSON file in `~/.cmdai/conversations` (`%USERPROFILE%\.cmdai\conversations` on Windows). Use `/history` to see the folder and saved conversation filenames. Set `CMD_AI_CONVERSATIONS_DIR` to use a different folder. Files contain user and assistant messages, not system instructions or API keys; they may still include private text, so protect the folder accordingly. Conversation context is also sent to the configured API with each request. You can customize the startup model and system instructions with `--model` and `--system`, or with `CMD_AI_MODEL` and `CMD_AI_SYSTEM_PROMPT`.
 
@@ -113,7 +128,7 @@ Set `CMD_AI_DEV_PASSWORD` in the environment before launching `.cmdAI`, then use
 
 While enabled, developer tools include:
 
-- `/model [name]` and `/system [instructions]` to inspect or change session settings.
+- `/system [instructions]` to inspect or change session instructions.
 - `/update` to update a pipx installation from within the chat.
 - `/history` to list locally saved conversations.
 - `/trainmodel` to save a prompt and preferred response; `/trainmodel list` shows examples, and `/trainmodel clear` removes them.

@@ -1,13 +1,16 @@
 """A cross-platform terminal client for Ollama and OpenAI-compatible chat APIs."""
 
 import argparse
+import ctypes
 import datetime
 import getpass
 import hmac
 import json
 import os
 import re
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import uuid
@@ -21,6 +24,135 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Keep answers clear and concise."
 MAX_TRAINING_EXAMPLES = 3
+MODEL_RECOMMENDATIONS = (
+    ("llama3.2:1b", 4, 2),
+    ("llama3.2:3b", 8, 4),
+    ("llama3.1:8b", 16, 8),
+    ("qwen2.5:14b", 24, 12),
+    ("qwen2.5:32b", 48, 24),
+)
+
+
+def system_memory_gb():
+    """Return total physical memory in GiB."""
+    if sys.platform == "win32":
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatus()
+        status.dwLength = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            raise OSError("could not read system memory information")
+        return status.ullTotalPhys / (1024 ** 3)
+
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    page_count = os.sysconf("SC_PHYS_PAGES")
+    return page_size * page_count / (1024 ** 3)
+
+
+def nvidia_memory_gb():
+    """Return the largest detected NVIDIA GPU memory size in GiB, if available."""
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        memory_sizes = [float(line.strip()) for line in result.stdout.splitlines() if line.strip()]
+    except ValueError:
+        return None
+    return max(memory_sizes) / 1024 if memory_sizes else None
+
+
+def recommend_model(ram_gb, gpu_gb=None):
+    """Choose the largest suggested model that fits the detected RAM or NVIDIA VRAM."""
+    fitting_models = [
+        (model, ram_requirement, gpu_requirement)
+        for model, ram_requirement, gpu_requirement in MODEL_RECOMMENDATIONS
+        if ram_gb >= ram_requirement or (gpu_gb is not None and gpu_gb >= gpu_requirement)
+    ]
+    model, ram_requirement, gpu_requirement = (
+        fitting_models[-1] if fitting_models else MODEL_RECOMMENDATIONS[0]
+    )
+    if ram_gb >= ram_requirement:
+        reason = "your system memory"
+    elif gpu_gb is not None and gpu_gb >= gpu_requirement:
+        reason = "your detected NVIDIA GPU memory"
+    else:
+        reason = "the smallest available option for a low-memory system"
+    return model, reason
+
+
+def run_setup_wizard(input_fn=None):
+    """Recommend a local Ollama model and optionally download it."""
+    if input_fn is None:
+        input_fn = input
+    try:
+        ram_gb = system_memory_gb()
+    except (OSError, ValueError) as error:
+        print(".cmdAI error: could not detect system memory: {}".format(error), file=sys.stderr)
+        return 1
+
+    gpu_gb = nvidia_memory_gb()
+    print("System memory: {:.1f} GiB".format(ram_gb))
+    if gpu_gb is None:
+        print("NVIDIA GPU memory: not detected (other GPU types may not be reported).")
+    else:
+        print("NVIDIA GPU memory: {:.1f} GiB".format(gpu_gb))
+
+    model, reason = recommend_model(ram_gb, gpu_gb)
+    print("Recommended model: {} (based on {}).".format(model, reason))
+    print("These are rough estimates for quantized models; actual speed and memory use vary.")
+    ollama = shutil.which("ollama")
+    if not ollama:
+        print("Install Ollama to download and run this model: https://ollama.com")
+        print("After installing it, run: ollama pull {}".format(model))
+        print("Then start .cmdAI with: cmdai --model {}".format(model))
+        return 0
+
+    try:
+        answer = input_fn("Download {} now with Ollama? [Y/n] ".format(model)).strip().lower()
+    except (EOFError, OSError):
+        answer = "n"
+    if answer not in ("", "y", "yes"):
+        print("No model downloaded. To use it later, run: ollama pull {}".format(model))
+        print("Start .cmdAI with: cmdai --model {}".format(model))
+        return 0
+
+    print("Downloading {}...".format(model))
+    try:
+        result = subprocess.run([ollama, "pull", model], check=False)
+    except OSError as error:
+        print(".cmdAI error: could not start Ollama: {}".format(error), file=sys.stderr)
+        return 1
+    if result.returncode != 0:
+        print(".cmdAI error: Ollama could not download {}.".format(model), file=sys.stderr)
+        return 1
+    print("Download complete. Start .cmdAI with: cmdai --model {}".format(model))
+    return 0
 
 
 def internet_available():
@@ -67,6 +199,62 @@ def ollama_chat_completion(messages, base_url, model):
     with urllib.request.urlopen(request, timeout=120) as response:
         result = json.loads(response.read().decode("utf-8"))
     return result["message"]["content"]
+
+
+def ollama_list_models(base_url):
+    """Return installed Ollama model names and their sizes in bytes."""
+    request = urllib.request.Request(base_url.rstrip("/") + "/api/tags")
+    with urllib.request.urlopen(request, timeout=15) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if not isinstance(result, dict):
+        raise ValueError("Ollama returned an invalid model list")
+    models = result.get("models")
+    if not isinstance(models, list):
+        raise ValueError("Ollama returned an invalid model list")
+
+    installed_models = []
+    for model in models:
+        if not isinstance(model, dict) or not isinstance(model.get("name"), str):
+            raise ValueError("Ollama returned an invalid model entry")
+        size = model.get("size", 0)
+        if not isinstance(size, int) or size < 0:
+            raise ValueError("Ollama returned an invalid model size")
+        installed_models.append((model["name"], size))
+    return installed_models
+
+
+def ollama_pull_model(name, base_url, progress_callback=None):
+    """Download a model from Ollama and report streamed status updates."""
+    payload = json.dumps({"name": name, "stream": True}).encode("utf-8")
+    request = urllib.request.Request(
+        base_url.rstrip("/") + "/api/pull",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    completed = False
+    with urllib.request.urlopen(request, timeout=120) as response:
+        for line in response:
+            if not line.strip():
+                continue
+            update = json.loads(line.decode("utf-8"))
+            if not isinstance(update, dict):
+                raise ValueError("Ollama returned an invalid download status")
+            if update.get("error"):
+                raise ValueError(update["error"])
+            if update.get("status") == "success":
+                completed = True
+            if progress_callback is not None:
+                progress_callback(update)
+    if not completed:
+        raise ValueError("Ollama ended the download without confirming success")
+
+
+def format_model_size(size):
+    """Format a model size reported in bytes."""
+    if not size:
+        return "size unknown"
+    return "{:.1f} GiB".format(size / (1024 ** 3))
 
 
 def chat_completion(messages, api_key, base_url, model):
@@ -218,7 +406,14 @@ def main(argv=None):
         action="store_true",
         help="print assistant replies without extra blank lines",
     )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="recommend an Ollama model for this computer",
+    )
     args = parser.parse_args(argv)
+    if args.setup:
+        return run_setup_wizard()
     if args.provider == "ollama":
         base_url = args.base_url or DEFAULT_OLLAMA_BASE_URL
         model = args.model or DEFAULT_OLLAMA_MODEL
@@ -290,13 +485,16 @@ def main(argv=None):
                                 print("Incorrect password.")
                     else:
                         print("Usage: /dev on|off|status")
-                elif command in ("/model", "/system", "/trainmodel", "/debug", "/context", "/export") and not developer_mode:
+                elif command in ("/system", "/trainmodel", "/debug", "/context", "/export") and not developer_mode:
                     print("Developer mode is off. Use /dev on to unlock this tool.")
                 elif command == "/help":
-                    print("Commands: /help, /exit, /clear, /history, /update, /spacing on|off, /dev on|off|status")
+                    print(
+                        "Commands: /help, /exit, /clear, /history, /models, /model [name], "
+                        "/pull <name>, /update, /spacing on|off, /dev on|off|status"
+                    )
                     if developer_mode:
                         print(
-                            "Developer tools: /model [name], /system [instructions], "
+                            "Developer tools: /system [instructions], "
                             "/trainmodel [list|clear], /debug, /context, /export <path>"
                         )
                     else:
@@ -321,10 +519,67 @@ def main(argv=None):
                     import cmdai_update
 
                     cmdai_update.main()
+                elif command == "/models":
+                    if args.provider != "ollama":
+                        print("Ollama model management is available only with --provider ollama.")
+                    else:
+                        try:
+                            installed_models = ollama_list_models(base_url)
+                        except (urllib.error.URLError, KeyError, ValueError) as error:
+                            print(".cmdAI error: could not list Ollama models: {}".format(error), file=sys.stderr)
+                        else:
+                            if not installed_models:
+                                print("No Ollama models are installed. Use /pull <name> to download one.")
+                            else:
+                                for name, size in installed_models:
+                                    marker = " (current)" if name == model else ""
+                                    print("{}{} - {}".format(name, marker, format_model_size(size)))
+                elif command == "/pull":
+                    if args.provider != "ollama":
+                        print("Ollama model management is available only with --provider ollama.")
+                    elif not value:
+                        print("Usage: /pull <model-name>")
+                    else:
+                        try:
+                            confirmation = input(
+                                "Download Ollama model '{}'? [y/N] ".format(value)
+                            ).strip().lower()
+                        except (EOFError, OSError):
+                            confirmation = ""
+                        if confirmation not in ("y", "yes"):
+                            print("Model download cancelled.")
+                        else:
+                            def show_pull_progress(update):
+                                status = update.get("status")
+                                if not isinstance(status, str):
+                                    status = "Downloading"
+                                completed = update.get("completed")
+                                total = update.get("total")
+                                if (
+                                    isinstance(completed, int)
+                                    and isinstance(total, int)
+                                    and total > 0
+                                ):
+                                    status += " ({:.0f}%)".format(100 * completed / total)
+                                print(".cmdAI> {}".format(status), flush=True)
+
+                            try:
+                                ollama_pull_model(
+                                    value,
+                                    base_url,
+                                    show_pull_progress,
+                                )
+                            except (urllib.error.URLError, KeyError, ValueError) as error:
+                                print(".cmdAI error: could not download model: {}".format(error), file=sys.stderr)
+                            else:
+                                print("Model '{}' is ready. Use /model {} to switch to it.".format(value, value))
                 elif command == "/model":
-                    if value:
-                        model = value
-                    print("Model: {}".format(model))
+                    if args.provider != "ollama" and not developer_mode:
+                        print("Developer mode is off. Use /dev on to unlock this tool.")
+                    else:
+                        if value:
+                            model = value
+                        print("Model: {}".format(model))
                 elif command == "/system":
                     if value:
                         messages[0]["content"] = value
