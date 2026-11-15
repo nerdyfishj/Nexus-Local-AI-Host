@@ -3,19 +3,19 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cmdai-assistant"
+name = "nexus-local-ai-host"
 version = "1.0.0"
-description = "A cross-platform terminal chat assistant for Ollama and OpenAI-compatible APIs"
+description = "A cross-platform local AI host for Ollama, LM Studio, llama.cpp Server, and LocalAI"
 readme = "README.md"
 requires-python = ">=3.9"
 
 [project.scripts]
-cmdai = "cmdai:main"
-cmdai-install = "install:main"
-cmdai-update = "cmdai_update:main"
+nexus = "nexus:main"
+nexus-install = "nexus_install:main"
+nexus-update = "nexus_update:main"
 
 [tool.setuptools]
-py-modules = ["cmdai", "install", "cmdai_update"]
+py-modules = ["nexus", "nexus_install", "nexus_update"]
 
 [tool.setuptools.data-files]
-"share/cmdai" = ["cmdAI.ico"]
+"share/nexus" = ["nexus.ico", "nexus.svg"]

@@ -1,9 +1,8 @@
-"""A cross-platform terminal client for Ollama and OpenAI-compatible chat APIs."""
+"""A cross-platform terminal client for local model hosts."""
 
 import argparse
 import ctypes
 import datetime
-import getpass
 import importlib
 from html.parser import HTMLParser
 import json
@@ -20,10 +19,15 @@ import urllib.request
 from urllib.parse import parse_qs, urlencode, urlparse
 
 
-DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_PROVIDER = "ollama"
+PROVIDER_BASE_URLS = {
+    "ollama": "http://localhost:11434",
+    "lm-studio": "http://localhost:1234/v1",
+    "llama-cpp": "http://localhost:8080/v1",
+    "localai": "http://localhost:8080/v1",
+}
+DEFAULT_OLLAMA_BASE_URL = PROVIDER_BASE_URLS["ollama"]
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
-DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Keep answers clear and concise."
 MAX_SELECTED_TEXT_FILE_BYTES = 1024 * 1024
 MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -35,13 +39,55 @@ MODEL_RECOMMENDATIONS = (
     ("qwen2.5:14b", 24, 12),
     ("qwen2.5:32b", 48, 24),
 )
+QWEN3_MODEL_RECOMMENDATIONS = (
+    ("qwen3:1.7b", 4, 2),
+    ("qwen3:4b", 8, 4),
+    ("qwen3:8b", 16, 8),
+    ("qwen3:14b", 24, 12),
+    ("qwen3:30b", 48, 24),
+)
+GEMMA3_MODEL_RECOMMENDATIONS = (
+    ("gemma3:1b", 4, 2),
+    ("gemma3:4b", 8, 4),
+    ("gemma3:12b", 16, 8),
+    ("gemma3:27b", 48, 24),
+)
+DEEPSEEK_R1_MODEL_RECOMMENDATIONS = (
+    ("deepseek-r1:1.5b", 4, 2),
+    ("deepseek-r1:7b", 16, 8),
+    ("deepseek-r1:14b", 24, 12),
+    ("deepseek-r1:32b", 48, 24),
+    ("deepseek-r1:70b", 64, 44),
+)
 CODING_MODEL_RECOMMENDATIONS = (
     ("qwen2.5-coder:1.5b", 4, 2),
     ("qwen2.5-coder:3b", 8, 4),
     ("qwen2.5-coder:7b", 16, 8),
     ("qwen2.5-coder:14b", 24, 12),
     ("qwen2.5-coder:32b", 48, 24),
+    ("qwen3-coder:30b", 48, 24),
 )
+GRANITE3_MODEL_RECOMMENDATIONS = (
+    ("granite3.3:2b", 4, 2),
+    ("granite3.3:8b", 16, 8),
+)
+PHI4_MODEL_RECOMMENDATIONS = (
+    ("phi4", 24, 12),
+)
+GPT_OSS_MODEL_RECOMMENDATIONS = (
+    ("gpt-oss:20b", 24, 16),
+    ("gpt-oss:120b", 96, 80),
+)
+MISTRAL_SMALL_MODEL_RECOMMENDATIONS = (
+    ("mistral-small3.2:24b", 32, 24),
+)
+DEVSTRAL_MODEL_RECOMMENDATIONS = (
+    ("devstral-small-2:24b", 32, 24),
+)
+MODEL_SETUP_NOTES = {
+    "gpt-oss:120b": "High-memory option; the model download is about 65 GB.",
+    "devstral-small-2:24b": "Requires Ollama 0.13.3 or newer.",
+}
 
 
 class DuckDuckGoResultsParser(HTMLParser):
@@ -169,6 +215,34 @@ def recommend_coding_model(ram_gb, gpu_gb=None):
     return recommend_from_models(CODING_MODEL_RECOMMENDATIONS, ram_gb, gpu_gb)
 
 
+def recommend_setup_models(ram_gb, gpu_gb=None):
+    """Return hardware-appropriate Ollama suggestions by model category."""
+    options = [
+        ("General",) + recommend_model(ram_gb, gpu_gb),
+        ("Qwen 3",) + recommend_from_models(QWEN3_MODEL_RECOMMENDATIONS, ram_gb, gpu_gb),
+        ("Gemma 3",) + recommend_from_models(GEMMA3_MODEL_RECOMMENDATIONS, ram_gb, gpu_gb),
+        ("DeepSeek R1",) + recommend_from_models(DEEPSEEK_R1_MODEL_RECOMMENDATIONS, ram_gb, gpu_gb),
+        ("Coding",) + recommend_coding_model(ram_gb, gpu_gb),
+    ]
+    additional_families = (
+        ("Granite 3.3", GRANITE3_MODEL_RECOMMENDATIONS),
+        ("Phi-4", PHI4_MODEL_RECOMMENDATIONS),
+        ("GPT-OSS", GPT_OSS_MODEL_RECOMMENDATIONS),
+        ("Mistral Small 3.2", MISTRAL_SMALL_MODEL_RECOMMENDATIONS),
+        ("Devstral Small 2", DEVSTRAL_MODEL_RECOMMENDATIONS),
+    )
+    for category, models in additional_families:
+        if any(
+            ram_gb >= ram_requirement
+            or (gpu_gb is not None and gpu_gb >= gpu_requirement)
+            for _, ram_requirement, gpu_requirement in models
+        ):
+            options.append(
+                (category,) + recommend_from_models(models, ram_gb, gpu_gb)
+            )
+    return tuple(options)
+
+
 def coding_mode_system_prompt(system_prompt):
     coding_instructions = (
         "Coding mode is enabled. Focus on programming tasks, explain assumptions, "
@@ -179,13 +253,13 @@ def coding_mode_system_prompt(system_prompt):
 
 
 def run_setup_wizard(input_fn=None, in_chat=False):
-    """Recommend a local Ollama model and optionally download it."""
+    """Offer hardware-based Ollama model choices and optionally download one."""
     if input_fn is None:
         input_fn = input
     try:
         ram_gb = system_memory_gb()
     except (OSError, ValueError) as error:
-        print(".cmdAI error: could not detect system memory: {}".format(error), file=sys.stderr)
+        print("Nexus error: could not detect system memory: {}".format(error), file=sys.stderr)
         return 1
 
     gpu_gb = nvidia_memory_gb()
@@ -195,13 +269,37 @@ def run_setup_wizard(input_fn=None, in_chat=False):
     else:
         print("NVIDIA GPU memory: {:.1f} GiB".format(gpu_gb))
 
-    model, reason = recommend_model(ram_gb, gpu_gb)
-    print("Recommended model: {} (based on {}).".format(model, reason))
+    model_options = recommend_setup_models(ram_gb, gpu_gb)
+    print("Model suggestions for your hardware:")
+    for index, (category, model, reason) in enumerate(model_options, 1):
+        note = MODEL_SETUP_NOTES.get(model)
+        note_text = " {}".format(note) if note else ""
+        print("{}. {}: {} (based on {}).{}".format(index, category, model, reason, note_text))
     print("These are rough estimates for quantized models; actual speed and memory use vary.")
+    try:
+        selection = input_fn("Choose a model [1-{}, default 1]: ".format(len(model_options))).strip()
+    except (EOFError, OSError):
+        selection = ""
+    if not selection:
+        selected_index = 0
+    elif selection.isdigit() and 1 <= int(selection) <= len(model_options):
+        selected_index = int(selection) - 1
+    else:
+        print(
+            "Nexus error: choose a model number from 1 to {}.".format(len(model_options)),
+            file=sys.stderr,
+        )
+        return 1
+
+    category, model, _ = model_options[selected_index]
+    print("Selected {} model: {}.".format(category, model))
+    note = MODEL_SETUP_NOTES.get(model)
+    if note:
+        print("Note: {}".format(note))
     model_instruction = (
         "Use /model {} to switch models in this chat.".format(model)
         if in_chat
-        else "Start .cmdAI with: cmdai --model {}".format(model)
+        else "Start Nexus with: nexus --model {}".format(model)
     )
     ollama = shutil.which("ollama")
     if not ollama:
@@ -223,10 +321,10 @@ def run_setup_wizard(input_fn=None, in_chat=False):
     try:
         result = subprocess.run([ollama, "pull", model], check=False)
     except OSError as error:
-        print(".cmdAI error: could not start Ollama: {}".format(error), file=sys.stderr)
+        print("Nexus error: could not start Ollama: {}".format(error), file=sys.stderr)
         return 1
     if result.returncode != 0:
-        print(".cmdAI error: Ollama could not download {}.".format(model), file=sys.stderr)
+        print("Nexus error: Ollama could not download {}.".format(model), file=sys.stderr)
         return 1
     print("Download complete. {}".format(model_instruction))
     return 0
@@ -249,10 +347,10 @@ def run_with_progress(operation, message):
         spinner = "|/-\\"
         index = 0
         while not stopped.is_set():
-            print("\r.cmdAI> {} {}".format(message, spinner[index]), end="", flush=True)
+            print("\rNexus> {} {}".format(message, spinner[index]), end="", flush=True)
             index = (index + 1) % len(spinner)
             stopped.wait(0.1)
-        print("\r" + " " * (len(message) + len(".cmdAI> ") + 1) + "\r", end="", flush=True)
+        print("\r" + " " * (len(message) + len("Nexus> ") + 1) + "\r", end="", flush=True)
 
     progress_thread = threading.Thread(target=show_progress)
     progress_thread.start()
@@ -335,7 +433,7 @@ def print_ollama_pull_progress(update):
     total = update.get("total")
     if isinstance(completed, int) and isinstance(total, int) and total > 0:
         status += " ({:.0f}%)".format(100 * completed / total)
-    print(".cmdAI> {}".format(status), flush=True)
+    print("Nexus> {}".format(status), flush=True)
 
 
 def run_coding_model_wizard(base_url, requested_model=None, input_fn=None):
@@ -345,7 +443,7 @@ def run_coding_model_wizard(base_url, requested_model=None, input_fn=None):
     try:
         ram_gb = system_memory_gb()
     except (OSError, ValueError) as error:
-        print(".cmdAI error: could not detect system memory: {}".format(error), file=sys.stderr)
+        print("Nexus error: could not detect system memory: {}".format(error), file=sys.stderr)
         return None
 
     gpu_gb = nvidia_memory_gb()
@@ -365,7 +463,7 @@ def run_coding_model_wizard(base_url, requested_model=None, input_fn=None):
     try:
         installed_models = {name for name, _ in ollama_list_models(base_url)}
     except (urllib.error.URLError, KeyError, ValueError) as error:
-        print(".cmdAI error: could not check installed Ollama models: {}".format(error), file=sys.stderr)
+        print("Nexus error: could not check installed Ollama models: {}".format(error), file=sys.stderr)
         return None
     if model in installed_models:
         print("Coding model is already installed.")
@@ -381,7 +479,7 @@ def run_coding_model_wizard(base_url, requested_model=None, input_fn=None):
     try:
         ollama_pull_model(model, base_url, print_ollama_pull_progress)
     except (urllib.error.URLError, KeyError, ValueError) as error:
-        print(".cmdAI error: could not download coding model: {}".format(error), file=sys.stderr)
+        print("Nexus error: could not download coding model: {}".format(error), file=sys.stderr)
         return None
     print("Coding model '{}' is ready.".format(model))
     return model
@@ -413,7 +511,7 @@ def web_search(query):
     url = "https://html.duckduckgo.com/html/?{}".format(urlencode({"q": query}))
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "cmdAI/1.0", "Accept": "text/html"},
+        headers={"User-Agent": "Nexus/1.0", "Accept": "text/html"},
     )
     with urllib.request.urlopen(request, timeout=15) as response:
         page = response.read(MAX_SEARCH_RESPONSE_BYTES + 1)
@@ -505,17 +603,17 @@ def read_selected_text_file(folder, relative_path):
         raise ValueError("file must contain UTF-8 text") from error
 
 
-def chat_completion(messages, api_key, base_url, model):
-    """Send a chat completion request and return the assistant's text."""
+def local_api_chat_completion(messages, api_key, base_url, model):
+    """Send a local host chat request using its compatible chat API."""
     url = base_url.rstrip("/") + "/chat/completions"
     payload = json.dumps({"model": model, "messages": messages}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
     request = urllib.request.Request(
         url,
         data=payload,
-        headers={
-            "Authorization": "Bearer " + api_key,
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=120) as response:
@@ -523,11 +621,36 @@ def chat_completion(messages, api_key, base_url, model):
     return result["choices"][0]["message"]["content"]
 
 
+def local_api_list_models(base_url, api_key=None):
+    """Return model identifiers exposed by a local host's compatible API."""
+    headers = {}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    request = urllib.request.Request(base_url.rstrip("/") + "/models", headers=headers)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    models = result.get("data")
+    if not isinstance(models, list):
+        raise ValueError("local host returned an invalid model list")
+    return [
+        item["id"]
+        for item in models
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+
+
 def conversations_directory():
-    configured_directory = os.environ.get("CMD_AI_CONVERSATIONS_DIR")
+    configured_directory = os.environ.get("NEXUS_CONVERSATIONS_DIR") or os.environ.get(
+        "CMD_AI_CONVERSATIONS_DIR"
+    )
     if configured_directory:
         return os.path.abspath(os.path.expanduser(configured_directory))
-    return os.path.join(os.path.expanduser("~"), ".cmdai", "conversations")
+    home = os.path.expanduser("~")
+    new_directory = os.path.join(home, ".nexus", "conversations")
+    legacy_directory = os.path.join(home, ".cmdai", "conversations")
+    if not os.path.exists(new_directory) and os.path.isdir(legacy_directory):
+        return legacy_directory
+    return new_directory
 
 
 def new_conversation_path(directory):
@@ -565,36 +688,37 @@ def list_conversations(directory):
 
 def load_private_developer():
     try:
-        module = importlib.import_module("cmdai_private_dev")
+        module = importlib.import_module("nexus_private_dev")
     except ModuleNotFoundError as error:
-        if error.name == "cmdai_private_dev":
+        if error.name == "nexus_private_dev":
             return None
         raise
     return module.PrivateDeveloperMode()
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Chat with an AI from your terminal.")
+    parser = argparse.ArgumentParser(description="Chat with local AI model hosts.")
     parser.add_argument(
         "--provider",
-        choices=("ollama", "openai"),
-        default=os.environ.get("CMD_AI_PROVIDER", "ollama"),
-        help="AI provider (default: ollama; or set CMD_AI_PROVIDER)",
+        choices=tuple(PROVIDER_BASE_URLS),
+        default=os.environ.get("NEXUS_PROVIDER") or os.environ.get("CMD_AI_PROVIDER", DEFAULT_PROVIDER),
+        help="local model host (default: ollama; or set NEXUS_PROVIDER)",
     )
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("CMD_AI_BASE_URL"),
-        help="provider API root (or set CMD_AI_BASE_URL)",
+        default=os.environ.get("NEXUS_BASE_URL") or os.environ.get("CMD_AI_BASE_URL"),
+        help="local host API root (or set NEXUS_BASE_URL)",
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("CMD_AI_MODEL"),
-        help="model name (or set CMD_AI_MODEL)",
+        default=os.environ.get("NEXUS_MODEL") or os.environ.get("CMD_AI_MODEL"),
+        help="model name (or set NEXUS_MODEL)",
     )
     parser.add_argument(
         "--system",
-        default=os.environ.get("CMD_AI_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
-        help="system prompt (or set CMD_AI_SYSTEM_PROMPT)",
+        default=os.environ.get("NEXUS_SYSTEM_PROMPT")
+        or os.environ.get("CMD_AI_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
+        help="system prompt (or set NEXUS_SYSTEM_PROMPT)",
     )
     parser.add_argument(
         "--compact",
@@ -609,21 +733,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.setup:
         return run_setup_wizard()
+    base_url = args.base_url or PROVIDER_BASE_URLS[args.provider]
+    api_key = os.environ.get("NEXUS_API_KEY") or os.environ.get("CMD_AI_API_KEY")
     if args.provider == "ollama":
-        base_url = args.base_url or DEFAULT_OLLAMA_BASE_URL
         model = args.model or DEFAULT_OLLAMA_MODEL
-        api_key = None
     else:
-        base_url = args.base_url or DEFAULT_OPENAI_BASE_URL
-        model = args.model or DEFAULT_OPENAI_MODEL
-        api_key = os.environ.get("CMD_AI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            try:
-                api_key = getpass.getpass("API key (input hidden): ")
-            except (EOFError, OSError):
-                parser.error("set CMD_AI_API_KEY or OPENAI_API_KEY before starting")
-        if not api_key:
-            parser.error("an API key is required for the OpenAI provider")
+        model = args.model
+        if not model:
+            parser.error(
+                "set NEXUS_MODEL or pass --model using a model identifier from the local host"
+            )
 
     base_system_prompt = args.system
     messages = [{"role": "system", "content": base_system_prompt}]
@@ -636,7 +755,7 @@ def main(argv=None):
     pending_web_context = None
     coding_mode = False
     model_before_coding = None
-    print(".cmdAI ready. Type /help for commands.")
+    print("Nexus ready. Type /help for commands.")
     try:
         while True:
             try:
@@ -688,7 +807,7 @@ def main(argv=None):
                     try:
                         saved_conversations = list_conversations(history_directory)
                     except OSError as error:
-                        print(".cmdAI error: could not list conversations: {}".format(error), file=sys.stderr)
+                        print("Nexus error: could not list conversations: {}".format(error), file=sys.stderr)
                     else:
                         if not saved_conversations:
                             print("No saved conversations.")
@@ -696,9 +815,9 @@ def main(argv=None):
                             for path in saved_conversations:
                                 print(os.path.basename(path))
                 elif command == "/update":
-                    import cmdai_update
+                    import nexus_update
 
-                    cmdai_update.main()
+                    nexus_update.main()
                 elif command == "/folder":
                     if sys.platform != "win32":
                         print("File access commands are currently available only on Windows.")
@@ -717,7 +836,7 @@ def main(argv=None):
                         try:
                             selected_folder = validate_selected_folder(value)
                         except (OSError, ValueError) as error:
-                            print(".cmdAI error: could not select folder: {}".format(error), file=sys.stderr)
+                            print("Nexus error: could not select folder: {}".format(error), file=sys.stderr)
                         else:
                             pending_file_context = None
                             print("Selected folder: {}".format(selected_folder))
@@ -731,7 +850,7 @@ def main(argv=None):
                                 raise NotADirectoryError("path is not a folder")
                             entries = sorted(os.listdir(folder), key=str.casefold)
                         except (OSError, ValueError) as error:
-                            print(".cmdAI error: could not list folder: {}".format(error), file=sys.stderr)
+                            print("Nexus error: could not list folder: {}".format(error), file=sys.stderr)
                         else:
                             if not entries:
                                 print("Folder is empty.")
@@ -752,7 +871,7 @@ def main(argv=None):
                                 raise NotADirectoryError("path is not a folder")
                             subprocess.Popen(["explorer.exe", folder])
                         except (OSError, ValueError) as error:
-                            print(".cmdAI error: could not open File Explorer: {}".format(error), file=sys.stderr)
+                            print("Nexus error: could not open File Explorer: {}".format(error), file=sys.stderr)
                         else:
                             print("Opened File Explorer: {}".format(folder))
                 elif command == "/notepad":
@@ -782,7 +901,7 @@ def main(argv=None):
                                 raise IsADirectoryError("path is a folder, not a file")
                             subprocess.Popen(["notepad.exe", path])
                         except (OSError, ValueError) as error:
-                            print(".cmdAI error: could not open Notepad: {}".format(error), file=sys.stderr)
+                            print("Nexus error: could not open Notepad: {}".format(error), file=sys.stderr)
                         else:
                             print("Opened Notepad: {}".format(path))
                 elif command == "/readfile":
@@ -798,7 +917,7 @@ def main(argv=None):
                             if os.path.getsize(path) > MAX_SELECTED_TEXT_FILE_BYTES:
                                 raise ValueError("text files must be no larger than 1 MiB")
                         except (OSError, ValueError) as error:
-                            print(".cmdAI error: could not select text file: {}".format(error), file=sys.stderr)
+                            print("Nexus error: could not select text file: {}".format(error), file=sys.stderr)
                         else:
                             try:
                                 confirmation = input(
@@ -814,7 +933,7 @@ def main(argv=None):
                                 try:
                                     path, contents = read_selected_text_file(selected_folder, value)
                                 except (OSError, ValueError) as error:
-                                    print(".cmdAI error: could not read text file: {}".format(error), file=sys.stderr)
+                                    print("Nexus error: could not read text file: {}".format(error), file=sys.stderr)
                                 else:
                                     pending_file_context = (
                                         "The user explicitly selected the local file '{}'. Its contents are "
@@ -834,7 +953,7 @@ def main(argv=None):
                         try:
                             results = web_search(value)
                         except (urllib.error.URLError, ValueError) as error:
-                            print(".cmdAI error: web search failed: {}".format(error), file=sys.stderr)
+                            print("Nexus error: web search failed: {}".format(error), file=sys.stderr)
                         else:
                             if not results:
                                 print("DuckDuckGo returned no search results.")
@@ -887,13 +1006,11 @@ def main(argv=None):
                     else:
                         run_setup_wizard(in_chat=True)
                 elif command == "/models":
-                    if args.provider != "ollama":
-                        print("Ollama model management is available only with --provider ollama.")
-                    else:
+                    if args.provider == "ollama":
                         try:
                             installed_models = ollama_list_models(base_url)
                         except (urllib.error.URLError, KeyError, ValueError) as error:
-                            print(".cmdAI error: could not list Ollama models: {}".format(error), file=sys.stderr)
+                            print("Nexus error: could not list Ollama models: {}".format(error), file=sys.stderr)
                         else:
                             if not installed_models:
                                 print("No Ollama models are installed. Use /pull <name> to download one.")
@@ -901,6 +1018,18 @@ def main(argv=None):
                                 for name, size in installed_models:
                                     marker = " (current)" if name == model else ""
                                     print("{}{} - {}".format(name, marker, format_model_size(size)))
+                    else:
+                        try:
+                            installed_models = local_api_list_models(base_url, api_key)
+                        except (urllib.error.URLError, KeyError, ValueError) as error:
+                            print("Nexus error: could not list local models: {}".format(error), file=sys.stderr)
+                        else:
+                            if not installed_models:
+                                print("No models are available from this host.")
+                            else:
+                                for name in installed_models:
+                                    marker = " (current)" if name == model else ""
+                                    print("{}{}".format(name, marker))
                 elif command == "/pull":
                     if args.provider != "ollama":
                         print("Ollama model management is available only with --provider ollama.")
@@ -928,7 +1057,7 @@ def main(argv=None):
                                     and total > 0
                                 ):
                                     status += " ({:.0f}%)".format(100 * completed / total)
-                                print(".cmdAI> {}".format(status), flush=True)
+                                print("Nexus> {}".format(status), flush=True)
 
                             try:
                                 ollama_pull_model(
@@ -937,16 +1066,13 @@ def main(argv=None):
                                     show_pull_progress,
                                 )
                             except (urllib.error.URLError, KeyError, ValueError) as error:
-                                print(".cmdAI error: could not download model: {}".format(error), file=sys.stderr)
+                                print("Nexus error: could not download model: {}".format(error), file=sys.stderr)
                             else:
                                 print("Model '{}' is ready. Use /model {} to switch to it.".format(value, value))
                 elif command == "/model":
-                    if args.provider != "ollama":
-                        print("Model selection is available only with the Ollama provider.")
-                    else:
-                        if value:
-                            model = value
-                        print("Model: {}".format(model))
+                    if value:
+                        model = value
+                    print("Model: {}".format(model))
                 elif command == "/spacing":
                     if value.lower() in ("on", "off"):
                         spaced_replies = value.lower() == "on"
@@ -982,16 +1108,16 @@ def main(argv=None):
                 if args.provider == "ollama":
                     answer = run_with_progress(
                         lambda: ollama_chat_completion(request_messages, base_url, model),
-                        "Generating with {} ({})".format(model, connection_status),
+                        "Nexus | {} ({})".format(model, connection_status),
                     )
                 else:
                     answer = run_with_progress(
-                        lambda: chat_completion(request_messages, api_key, base_url, model),
-                        "Generating with {} ({})".format(model, connection_status),
+                        lambda: local_api_chat_completion(request_messages, api_key, base_url, model),
+                        "Nexus | {} ({})".format(model, connection_status),
                     )
             except (urllib.error.URLError, urllib.error.HTTPError, KeyError, IndexError, ValueError) as error:
                 messages.pop()
-                print(".cmdAI error: {}".format(error), file=sys.stderr)
+                print("Nexus error: {}".format(error), file=sys.stderr)
                 if args.provider == "ollama" and isinstance(error, urllib.error.URLError):
                     print(
                         "Make sure Ollama is running and the '{}' model is installed.".format(model),
@@ -1006,10 +1132,10 @@ def main(argv=None):
             try:
                 save_conversation(conversation_path, args.provider, model, messages)
             except OSError as error:
-                print(".cmdAI warning: could not save conversation: {}".format(error), file=sys.stderr)
+                print("Nexus warning: could not save conversation: {}".format(error), file=sys.stderr)
             if spaced_replies:
                 print()
-            print(".cmdAI> {}".format(answer))
+            print("Nexus> {}".format(answer))
             if spaced_replies:
                 print()
     except KeyboardInterrupt:

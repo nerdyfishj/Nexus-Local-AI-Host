@@ -1,145 +1,135 @@
-# .cmdAI
+# Nexus Local AI Host
 
-A small terminal chat assistant for Windows, Linux, and macOS. It uses only the Python standard library and defaults to Ollama running locally, so no API key is needed. An OpenAI-compatible API is also available as an optional provider.
+**Your models. Your machine. One local hub.**
+
+Nexus gives you one terminal chat for models running on your own computer. It supports Ollama, LM Studio, llama.cpp Server, and LocalAI. By default, requests go to a local service; no hosted AI account or API key is required.
 
 ## Requirements
 
 - Python 3.9 or newer
-- Git and pipx (for installing directly from GitHub)
-- Ollama with a model downloaded, unless you plan to use the OpenAI provider
+- Ollama, LM Studio, llama.cpp Server, or LocalAI
+- Git and pipx only if installing from the GitHub repository
 
-## Setup
+## Install
 
-### Prepare your computer
-
-Before installing from GitHub:
-
-1. Install [Python 3.9 or newer](https://www.python.org/downloads/) and [Git](https://git-scm.com/downloads/).
-2. Install [pipx](https://pipx.pypa.io/stable/installation/) for your operating system. Follow its instructions to make the `pipx` command available; on Windows, you may need to restart your terminal after setting up its PATH.
-3. For the default local provider, install [Ollama](https://ollama.com), start it, and download the default model:
-
-   ```sh
-   ollama pull llama3.1:8b
-   ```
-
-   If you prefer OpenAI, you can skip Ollama and configure an API key instead.
-
-### Install from GitHub
-
-Run both commands in a terminal:
+### From GitHub
 
 ```sh
-pipx install "git+https://github.com/nerdyfishj/.cmdAI.git"
-cmdai-install
+pipx install "git+https://github.com/nerdyfishj/nexus-local-ai-host.git"
+nexus-install
 ```
 
-This installs `.cmdAI` in an isolated Python environment and creates a desktop launcher (`.cmdAI.lnk` on Windows, `cmdAI.desktop` on Linux, or `cmdAI.app` on macOS). Opening the launcher starts the chat in a terminal on each OS: Windows opens the Python console, Linux uses the desktop terminal, and macOS opens Terminal. To start it directly from any terminal instead, run `cmdai`.
+The installer creates a desktop launcher. Start Nexus from a terminal with `nexus`.
 
-### Choose a model for your computer
+### From a local checkout
 
-Run the setup wizard from a terminal:
-
-```sh
-cmdai --setup
+```powershell
+# Windows
+py nexus_install.py
 ```
 
-From a local checkout, use `python cmdai.py --setup` (or `py cmdai.py --setup` on Windows). The wizard estimates a model using system memory and, when `nvidia-smi` is available, NVIDIA GPU memory. Estimates are approximate; other GPU types may not be detected. If Ollama is installed, the wizard asks before downloading the recommendation. It does not change the default model. To use the recommendation, start chat with the model it prints, for example `cmdai --model llama3.1:8b`.
-
-### Install from a local checkout
-
-Clone or download this repository into a permanent folder, then run the installer once:
-
-Open a terminal in the folder containing `install.py`, then run:
-
 ```sh
-# Windows (PowerShell)
-py install.py
-
 # macOS or Linux
-python3 install.py
+python3 nexus_install.py
 ```
 
-This creates the platform-specific desktop launcher, which opens the chat in a terminal. Repository downloads do not automatically execute installer code; running this command is the step that creates the shortcut.
+The desktop launcher points to this checkout. If you move the folder, run the installer again.
 
-On Windows, the shortcut launches this folder's Python interpreter and `cmdai.py` directly; GitHub Desktop is not required. If you move the repository, run `python install.py` again from its new location to update the shortcut.
+## Choose a local model host
 
-Then launch `.cmdAI` from the desktop. The default model is `llama3.1:8b`, served locally at `http://localhost:11434`. It is a larger, more capable model than the previous default and uses more disk space and memory. Choose another installed model with `CMD_AI_MODEL` or `--model`.
-
-## Updating
-
-Close `.cmdAI` before updating, then use the method that matches how you installed it:
-
-### Installed with pipx from GitHub
-
-If your installed version already includes the updater, update from a terminal:
+Ollama is the default. Start Ollama and download a model:
 
 ```sh
-cmdai-update
+ollama pull llama3.1:8b
+nexus
 ```
 
-Or type `/update` in a chat. Exit and restart `.cmdAI` to use the new version. If your version does not yet include the updater, run this one time:
+Nexus also supports local chat services that expose a compatible chat API:
+
+| Host | Provider | Default API root |
+| --- | --- | --- |
+| Ollama | `ollama` | `http://localhost:11434` |
+| LM Studio | `lm-studio` | `http://localhost:1234/v1` |
+| llama.cpp Server | `llama-cpp` | `http://localhost:8080/v1` |
+| LocalAI | `localai` | `http://localhost:8080/v1` |
+
+Start the host and load a model first. Select its model identifier with `--model`:
 
 ```sh
-pipx upgrade cmdai-assistant
+nexus --provider lm-studio --model <model-id>
+nexus --provider llama-cpp --model <model-id>
+nexus --provider localai --model <model-id>
 ```
 
-After that, use `cmdai-update` or `/update` for later updates.
+`/models` lists models exposed by the selected host, and `/model <model-id>` switches models in the current chat. Use `--base-url` to override a host's default URL. The optional `NEXUS_API_KEY` environment variable is only used when a local service requires authentication; it is not needed for the default local setup.
 
-### Installed from a local Git clone with `install.py`
+You can set `NEXUS_PROVIDER`, `NEXUS_MODEL`, `NEXUS_BASE_URL`, and `NEXUS_SYSTEM_PROMPT` to customize startup. The default Ollama model is `llama3.1:8b`.
 
-Open a terminal in the cloned repository folder and pull the latest version:
+## Setup and updates
+
+The Ollama model wizard uses available system RAM and detected NVIDIA GPU memory to suggest models that fit approximately. Choices include general, Qwen 3, Gemma 3, DeepSeek R1, coding, Granite 3.3, Phi-4, GPT-OSS, Mistral Small 3.2, and Devstral Small 2 models. High-memory choices are shown only when the detected hardware meets the wizard's rough thresholds.
 
 ```sh
-git pull
+nexus --setup
 ```
 
-Then reopen the desktop shortcut. You do not need to rerun `install.py` unless you moved the repository folder or need to recreate the shortcut.
-
-### Installed from a downloaded ZIP archive
-
-Download the [latest ZIP archive from GitHub](https://github.com/nerdyfishj/.cmdAI/archive/refs/heads/main.zip) and replace the old application folder with the updated files. If you put the new folder in a different location, run `install.py` again from that folder to recreate the desktop shortcut.
-
-To use OpenAI instead, select the provider; it will prompt for an API key if needed:
+Choose a model number; the wizard asks before downloading it. To install or run a model manually, use its Ollama model ID:
 
 ```sh
-python cmdai.py --provider openai
+ollama pull <model-id>
+nexus --model <model-id>
 ```
 
-For the optional OpenAI-compatible provider, configure `CMD_AI_BASE_URL` and `CMD_AI_MODEL` as needed. The OpenAI defaults are `https://api.openai.com/v1` and `gpt-4o-mini`; set `CMD_AI_API_KEY` or `OPENAI_API_KEY` to avoid the key prompt.
+Additional model IDs offered by the wizard:
 
-Prompts and replies are spaced out by default; start with `--compact` or use `/spacing on|off` to change that during a session. Type `/help` for available commands:
+| Family | Ollama model IDs | Notes |
+| --- | --- | --- |
+| Granite 3.3 | `granite3.3:2b`, `granite3.3:8b` | Lightweight general-purpose models. |
+| Phi-4 | `phi4` | 14B reasoning/general model; needs more memory. |
+| GPT-OSS | `gpt-oss:20b`, `gpt-oss:120b` | The 120B model is a very high-memory option (about 65 GB to download). |
+| Mistral Small 3.2 | `mistral-small3.2:24b` | 24B general-purpose model. |
+| Devstral Small 2 | `devstral-small-2:24b` | Coding model; requires Ollama 0.13.3 or newer. |
 
-While each response is generating, .cmdAI shows a live progress indicator with the model name and whether it detected an internet connection. This check does not send your prompt or API key.
+These are approximate hardware recommendations, not guarantees; actual memory use depends on the system, model, and context length. If the Ollama version is too old for Devstral Small 2, update Ollama before downloading it.
 
-- `/clear` starts a fresh conversation while keeping your system instructions.
-- `/setup` runs the Ollama model recommendation wizard from the chat.
-- `/models` lists installed Ollama models and marks the active model.
-- `/model [name]` shows or switches the model for the current session.
+Close Nexus before updating.
+
+- For a pipx installation, run `nexus-update`.
+- For a local Git checkout, pull the latest files and reopen the desktop shortcut.
+
+## Chat commands
+
+- `/clear` starts a fresh conversation.
+- `/setup` recommends an Ollama model.
+- `/models` lists models available from the active host.
+- `/model [name]` shows or changes the active model.
 - `/pull <name>` downloads an Ollama model after confirmation.
-- `/coding on|off|status [model]` enables coding-focused instructions and selects a coding model.
-- `/search <query>` searches DuckDuckGo and asks the configured model to answer using the results.
+- `/coding on|off|status [model]` enables coding-focused instructions with Ollama.
+- `/search <query>` searches DuckDuckGo and sends result snippets to the selected local model.
 - `/folder`, `/files`, `/explorer`, `/notepad`, and `/readfile` provide selected-folder tools on Windows.
-- `/exit` or `/quit` ends the chat.
+- `/update` runs the pipx updater.
+- `/spacing on|off` changes reply spacing.
+- `/exit` ends the chat.
 
-Ollama model commands work with the Ollama provider. For example, use `/models` to see installed models, `/pull qwen2.5:7b` to download one (and confirm the prompt), then `/model qwen2.5:7b` to use it for the current session. Model downloads are not automatic, and model deletion is not currently supported.
+Prompts and replies are saved locally in `%USERPROFILE%\.nexus\conversations` on Windows or `~/.nexus/conversations` on macOS and Linux. Protect that folder as it may contain private text. Set `NEXUS_CONVERSATIONS_DIR` to use another location. If an existing `.cmdai/conversations` folder is present and the new `.nexus` folder is not, Nexus continues using the existing folder so upgrading does not discard chat history.
 
-`/coding on` checks system memory and detectable NVIDIA GPU memory, recommends a Qwen2.5-Coder model, and asks before downloading it if it is not installed. Use `/coding on <model-name>` to select a different coding model, `/coding status` to check the mode, and `/coding off` to restore the prior model and system instructions. This switches models and adds coding-focused instructions; it does not run code or edit files.
+## Development tools
 
-`/search <query>` sends the query to DuckDuckGo, then sends up to five result titles, URLs, and snippets to the configured AI provider for an answer. You do not need to install DuckDuckGo, but you need an internet connection. Search queries go to DuckDuckGo, and result snippets go to your selected AI provider. The search context is used for that answer and is not saved in local conversation history.
+The optional private development commands require a source checkout. The `nexus_private_dev.py` module is intentionally excluded from GitHub and packaged installs, so copy it separately beside `nexus.py`. Set `NEXUS_DEV_PASSWORD` locally, then launch Nexus from that folder:
 
-### Windows file and desktop tools
+```powershell
+# Windows PowerShell
+$env:NEXUS_DEV_PASSWORD = "choose-a-local-password"
+py nexus.py
+```
 
-These commands are explicit and are currently available only on Windows:
+```sh
+# macOS or Linux
+export NEXUS_DEV_PASSWORD="choose-a-local-password"
+python3 nexus.py
+```
 
-- `/folder <absolute-path>` selects the folder the tools may access; `/folder off` clears it.
-- `/files [relative-folder]` lists entries in the selected folder.
-- `/explorer [relative-folder]` opens the selected folder or a subfolder in File Explorer.
-- `/notepad <relative-file>` opens a file in Notepad. Creating a new empty file requires confirmation.
-- `/readfile <relative-text-file>` asks before sharing a UTF-8 text file (up to 1 MiB) with the configured AI provider. The contents are included only in the next request and are not saved to local conversation history.
-
-Paths must stay inside the selected folder. These tools do not delete files or let the AI operate the desktop autonomously. Use Notepad for edits; the AI does not automatically write changes to files.
-
-Each conversation is automatically saved as a JSON file in `~/.cmdai/conversations` (`%USERPROFILE%\.cmdai\conversations` on Windows). Use `/history` to see the folder and saved conversation filenames. Set `CMD_AI_CONVERSATIONS_DIR` to use a different folder. Files contain user and assistant messages, not system instructions or API keys; they may still include private text, so protect the folder accordingly. Conversation context is also sent to the configured API with each request. You can customize the startup model and system instructions with `--model` and `--system`, or with `CMD_AI_MODEL` and `CMD_AI_SYSTEM_PROMPT`.
+At the Nexus prompt, run `/dev on` and enter the password, then `/dev test` to run the local test suite. `/dev preview on` also includes tests in the optional `experiments` folder; copy that folder if needed. `/dev modeltest [model]` requires a running local Ollama service. Keep the password local; do not put it on the USB stick or commit it.
 
 ## Verify
 

@@ -1,2 +1,3 @@
-cmdai_private_dev.py
-__pycache__/cmdai_private_dev.*.pyc
+nexus_private_dev.py
+__pycache__/nexus_private_dev.*.pyc
+/experiments/

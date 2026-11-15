@@ -1,4 +1,4 @@
-"""Create a .cmdAI launcher on the current user's desktop."""
+"""Create a Nexus launcher on the current user's desktop."""
 
 import os
 import shlex
@@ -10,14 +10,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-SCRIPT = ROOT / "cmdai.py"
+SCRIPT = ROOT / "nexus.py"
+APP_NAME = "Nexus Local AI Host"
 
 
 def icon_path():
-    source_icon = ROOT / "cmdAI.ico"
+    source_icon = ROOT / "nexus.ico"
     if source_icon.is_file():
         return source_icon
-    return Path(sysconfig.get_path("data")) / "share" / "cmdai" / "cmdAI.ico"
+    return Path(sysconfig.get_path("data")) / "share" / "nexus" / "nexus.ico"
 
 
 def png_data_from_icon(icon_path):
@@ -56,7 +57,7 @@ def desktop_directory():
 
 
 def install_windows(desktop):
-    shortcut = desktop / ".cmdAI.lnk"
+    shortcut = desktop / "{}.lnk".format(APP_NAME)
     icon = icon_path()
     quote = lambda value: "'{}'".format(str(value).replace("'", "''"))
     command = (
@@ -80,7 +81,7 @@ def install_windows(desktop):
 
 def install_unix(desktop):
     if sys.platform == "darwin":
-        shortcut = desktop / "cmdAI.app"
+        shortcut = desktop / "{}.app".format(APP_NAME)
         contents_dir = shortcut / "Contents"
         executable_dir = contents_dir / "MacOS"
         executable_dir.mkdir(parents=True, exist_ok=True)
@@ -105,23 +106,23 @@ def install_unix(desktop):
             "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
             "<plist version=\"1.0\"><dict>"
             "<key>CFBundleExecutable</key><string>launcher</string>"
-            "<key>CFBundleIdentifier</key><string>local.cmdai.launcher</string>"
-            "<key>CFBundleName</key><string>.cmdAI</string>"
-            "<key>CFBundleDisplayName</key><string>.cmdAI</string>"
+            "<key>CFBundleIdentifier</key><string>local.nexus.localaihost.launcher</string>"
+            "<key>CFBundleName</key><string>Nexus Local AI Host</string>"
+            "<key>CFBundleDisplayName</key><string>Nexus Local AI Host</string>"
             "<key>CFBundlePackageType</key><string>APPL</string>"
             "<key>CFBundleVersion</key><string>1.0</string>"
             "</dict></plist>\n",
             encoding="utf-8",
         )
     else:
-        shortcut = desktop / "cmdAI.desktop"
-        logo_path = ROOT / "cmdAI.png"
-        if not (ROOT / "cmdAI.ico").is_file():
-            logo_path = desktop / "cmdAI.png"
+        shortcut = desktop / "Nexus Local AI Host.desktop"
+        logo_path = ROOT / "nexus.png"
+        if not (ROOT / "nexus.ico").is_file():
+            logo_path = desktop / "nexus.png"
         write_logo_png(logo_path)
         escape = lambda value: str(value).replace("\\", "\\\\").replace('"', '\\"')
         contents = (
-            "[Desktop Entry]\nType=Application\nName=.cmdAI\nTerminal=true\n"
+            "[Desktop Entry]\nType=Application\nName=Nexus Local AI Host\nTerminal=true\n"
             "Exec=\"{}\" \"{}\"\nIcon=\"{}\"\nCategories=Utility;\n"
         ).format(escape(sys.executable), escape(SCRIPT), escape(logo_path))
         shortcut.write_text(contents, encoding="utf-8")
@@ -134,7 +135,7 @@ def main():
     desktop.mkdir(parents=True, exist_ok=True)
     shortcut = install_windows(desktop) if sys.platform == "win32" else install_unix(desktop)
     print("Created desktop launcher: {}".format(shortcut))
-    print("The default Ollama provider runs locally and does not require an API key.")
+    print("The default Ollama host runs locally and does not require an API key.")
 
 
 if __name__ == "__main__":
