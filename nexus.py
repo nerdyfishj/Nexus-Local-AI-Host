@@ -28,6 +28,7 @@ PROVIDER_BASE_URLS = {
 }
 DEFAULT_OLLAMA_BASE_URL = PROVIDER_BASE_URLS["ollama"]
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
+CLIENT_NAME = "Nexus Client"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Keep answers clear and concise."
 MAX_SELECTED_TEXT_FILE_BYTES = 1024 * 1024
 MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -347,10 +348,14 @@ def run_with_progress(operation, message):
         spinner = "|/-\\"
         index = 0
         while not stopped.is_set():
-            print("\rNexus> {} {}".format(message, spinner[index]), end="", flush=True)
+            print("\r{}> {} {}".format(CLIENT_NAME, message, spinner[index]), end="", flush=True)
             index = (index + 1) % len(spinner)
             stopped.wait(0.1)
-        print("\r" + " " * (len(message) + len("Nexus> ") + 1) + "\r", end="", flush=True)
+        print(
+            "\r" + " " * (len(message) + len(CLIENT_NAME) + 3) + "\r",
+            end="",
+            flush=True,
+        )
 
     progress_thread = threading.Thread(target=show_progress)
     progress_thread.start()
@@ -433,7 +438,7 @@ def print_ollama_pull_progress(update):
     total = update.get("total")
     if isinstance(completed, int) and isinstance(total, int) and total > 0:
         status += " ({:.0f}%)".format(100 * completed / total)
-    print("Nexus> {}".format(status), flush=True)
+    print("{}> {}".format(CLIENT_NAME, status), flush=True)
 
 
 def run_coding_model_wizard(base_url, requested_model=None, input_fn=None):
@@ -755,7 +760,7 @@ def main(argv=None):
     pending_web_context = None
     coding_mode = False
     model_before_coding = None
-    print("Nexus ready. Type /help for commands.")
+    print("{} ready. Type /help for commands.".format(CLIENT_NAME))
     try:
         while True:
             try:
@@ -1057,7 +1062,7 @@ def main(argv=None):
                                     and total > 0
                                 ):
                                     status += " ({:.0f}%)".format(100 * completed / total)
-                                print("Nexus> {}".format(status), flush=True)
+                                print("{}> {}".format(CLIENT_NAME, status), flush=True)
 
                             try:
                                 ollama_pull_model(
@@ -1108,12 +1113,12 @@ def main(argv=None):
                 if args.provider == "ollama":
                     answer = run_with_progress(
                         lambda: ollama_chat_completion(request_messages, base_url, model),
-                        "Nexus | {} ({})".format(model, connection_status),
+                        "{} ({})".format(model, connection_status),
                     )
                 else:
                     answer = run_with_progress(
                         lambda: local_api_chat_completion(request_messages, api_key, base_url, model),
-                        "Nexus | {} ({})".format(model, connection_status),
+                        "{} ({})".format(model, connection_status),
                     )
             except (urllib.error.URLError, urllib.error.HTTPError, KeyError, IndexError, ValueError) as error:
                 messages.pop()
@@ -1135,7 +1140,7 @@ def main(argv=None):
                 print("Nexus warning: could not save conversation: {}".format(error), file=sys.stderr)
             if spaced_replies:
                 print()
-            print("Nexus> {}".format(answer))
+            print("{}> {}".format(CLIENT_NAME, answer))
             if spaced_replies:
                 print()
     except KeyboardInterrupt:

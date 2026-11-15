@@ -743,9 +743,10 @@ class ChatCompletionTests(unittest.TestCase):
                                 self.assertEqual(nexus.main(["--compact"]), 0)
 
                 text = output.getvalue()
-                self.assertIn("Nexus> Nexus | llama3.1:8b ({})".format(status), text)
-                answer_position = text.index("Nexus> Hello")
-                self.assertLess(text.index("Nexus> Nexus |"), answer_position)
+                self.assertIn("Nexus Client> llama3.1:8b ({})".format(status), text)
+                self.assertIn("Nexus Client ready. Type /help for commands.", text)
+                answer_position = text.index("Nexus Client> Hello")
+                self.assertLess(text.index("Nexus Client> llama3.1:8b"), answer_position)
 
     def test_progress_indicator_updates_until_generation_finishes(self):
         output = io.StringIO()
@@ -759,7 +760,7 @@ class ChatCompletionTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(nexus.main(["--compact"]), 0)
 
-        self.assertGreaterEqual(output.getvalue().count("Nexus | llama3.1:8b"), 2)
+        self.assertGreaterEqual(output.getvalue().count("Nexus Client> llama3.1:8b"), 2)
 
     def test_internet_check_handles_unreachable_network(self):
         with patch("nexus.socket.create_connection", side_effect=OSError("unreachable")) as connect:
@@ -806,8 +807,8 @@ class ChatCompletionTests(unittest.TestCase):
                     with redirect_stdout(output):
                         self.assertEqual(nexus.main(["--compact"]), 0)
 
-        self.assertIn("Nexus> Hello\n", output.getvalue())
-        self.assertNotIn("\n\nNexus> Hello", output.getvalue())
+        self.assertIn("Nexus Client> Hello\n", output.getvalue())
+        self.assertNotIn("\n\nNexus Client> Hello", output.getvalue())
         self.assertEqual(user_input.call_args_list[0].args, ("you> ",))
 
     def test_default_spacing_adds_a_blank_line_before_each_prompt(self):
